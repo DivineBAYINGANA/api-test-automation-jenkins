@@ -13,7 +13,7 @@ permissions:
   contents: read
   checks: write        
   pull-requests: write 
-  packages: write      # Required for GHCR
+  packages: write      
 
 # ── Jobs ─────────────────────────────────────────────────────────────────────
 jobs:
@@ -53,62 +53,39 @@ jobs:
             --batch-mode \
             --no-transfer-progress
 
-      # 5. Parse surefire XML and expose counts + failure details
+      # 5. Robust parsing of surefire XML results
       - name: Parse test results
         if: always()
         id: parse-results
         run: |
-          TOTAL=0; PASSED=0; FAILED=0; SKIPPED=0; ERRORS=0
-
-          for f in target/surefire-reports/TEST-*.xml; do
-            [ -f "$f" ] || continue
-            t=$(grep  -oP 'tests="\K[0-9]+'    "$f" | head -1)
-            fa=$(grep -oP 'failures="\K[0-9]+' "$f" | head -1)
-            sk=$(grep -oP 'skipped="\K[0-9]+'  "$f" | head -1)
-            er=$(grep -oP 'errors="\K[0-9]+'   "$f" | head -1)
-            TOTAL=$((TOTAL   + ${t:-0}))
-            FAILED=$((FAILED  + ${fa:-0}))
-            SKIPPED=$((SKIPPED + ${sk:-0}))
-            ERRORS=$((ERRORS  + ${er:-0}))
-          done
-
-          PASSED=$((TOTAL - FAILED - SKIPPED - ERRORS))
-          [ "$TOTAL" -gt 0 ] && PASS_PCT=$((PASSED * 100 / TOTAL)) || PASS_PCT=0
-
-          # Build HTML rows for failed tests
-          FAILURES_HTML=""
-          for f in target/surefire-reports/TEST-*.xml; do
-            [ -f "$f" ] || continue
-            while IFS='|' read -r cls nm msg; do
-              FAILURES_HTML+="<tr>"
-              FAILURES_HTML+="<td style='padding:8px 12px;border-bottom:1px solid #eee;font-family:monospace;font-size:12px;color:#b71c1c'>${cls}</td>"
-              FAILURES_HTML+="<td style='padding:8px 12px;border-bottom:1px solid #eee;font-size:13px'>${nm}</td>"
-              FAILURES_HTML+="<td style='padding:8px 12px;border-bottom:1px solid #eee;font-size:12px;color:#555'>${msg}</td>"
-              FAILURES_HTML+="</tr>"
-            done < <(python3 - "$f" <<'PYEOF'
-          import sys, xml.etree.ElementTree as ET
-          tree = ET.parse(sys.argv[1])
-          for tc in tree.findall('.//testcase'):
-              node = tc.find('failure') or tc.find('error')
-              if node is None: continue
-              msg = ((node.get('message') or node.text or '').strip())[:280]
-              print(f"{tc.get('classname','')}|{tc.get('name','')}|{msg}")
+          python3 << 'PYEOF'
+          import os, glob, xml.etree.ElementTree as ET
+          
+          total, passed, failed, skipped, errors = 0, 0, 0, 0, 0
+          files = glob.glob("target/surefire-reports/TEST-*.xml")
+          
+          for f in files:
+              try:
+                  tree = ET.parse(f)
+                  root = tree.getroot()
+                  total   += int(root.get("tests", 0))
+                  failed  += int(root.get("failures", 0))
+                  errors  += int(root.get("errors", 0))
+                  skipped += int(root.get("skipped", 0))
+              except Exception as e:
+                  print(f"Error parsing {f}: {e}")
+          
+          p_count = total - failed - errors - skipped
+          f_total = failed + errors
+          pass_pct = int((p_count / total) * 100) if total > 0 else 0
+          
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+              out.write(f"total={total}\n")
+              out.write(f"passed={p_count}\n")
+              out.write(f"failed={f_total}\n")
+              out.write(f"skipped={skipped}\n")
+              out.write(f"pass_pct={pass_pct}\n")
           PYEOF
-            )
-          done
-
-          echo "total=$TOTAL"     >> $GITHUB_OUTPUT
-          echo "passed=$PASSED"   >> $GITHUB_OUTPUT
-          echo "failed=$FAILED"   >> $GITHUB_OUTPUT
-          echo "skipped=$SKIPPED" >> $GITHUB_OUTPUT
-          echo "errors=$ERRORS"   >> $GITHUB_OUTPUT
-          echo "pass_pct=$PASS_PCT" >> $GITHUB_OUTPUT
-          {
-            echo "failures_html<<HTMLEOF"
-            printf '%s' "$FAILURES_HTML"
-            echo ""
-            echo "HTMLEOF"
-          } >> $GITHUB_OUTPUT
 
       # 6. Publish JUnit 5 test results as GitHub Check
       - name: Publish Test Results
@@ -142,7 +119,7 @@ jobs:
           path: target/surefire-reports/
           retention-days: 14
 
-      # 10. Email and Slack notifications (Python scripts omitted for brevity in summary, preserved in file)
+      # 10. Email Notification (Rich HTML)
       - name: Send email report
         if: always()
         env:
@@ -175,33 +152,51 @@ jobs:
               if data.get("status") in ["failed", "broken"]:
                   labels = {l["name"]: l["value"] for l in data.get("labels", [])}
                   test_class = labels.get("testClass", "").split(".")[-1] or "Unknown"
-                  steps_list = [f"{i}. {s.get('name', 'Step')}" for i, s in enumerate(data.get("steps", []), 1)]
-                  steps_str = "<br>".join(steps_list) if steps_list else "1. See Allure report."
-                  desc_raw = data.get("description", "No description provided.")
-                  desc = desc_raw.split("**Impact:**")[0].strip().replace("\n", "<br>") if "**Impact:**" in desc_raw else desc_raw.replace("\n", "<br>")
-                  impact = desc_raw.split("**Impact:**")[1].strip() if "**Impact:**" in desc_raw else "High: Attention required."
                   severity = labels.get("severity", "normal").capitalize()
                   msg = data.get("statusDetails", {}).get("message", "N/A")
-                  failing_tests.append({"name": data.get("name"), "class": test_class, "desc": desc, "steps": steps_str, "impact": impact, "severity": severity, "message": msg})
+                  failing_tests.append({"name": data.get("name"), "class": test_class, "severity": severity, "message": msg})
 
-          outcome = "${{ steps.run-tests.outcome }}"
-          is_pass = (outcome == "success" and int(failed) == 0)
+          is_pass = (int(failed) == 0 and int(total) > 0)
           status, s_icon, s_color, s_bg = ("PASSED", "✅", "#2e7d32", "#e8f5e9") if is_pass else ("FAILED", "❌", "#b71c1c", "#ffebee")
-          next_steps = "All tests passed." if is_pass else "Action required."
           timestamp = datetime.now(timezone.utc).strftime("%d %B %Y at %H:%M UTC")
-          
+
           fail_block = ""
           if failing_tests:
-            fail_block = '<h2 style="color:#b71c1c">🚨 Detailed Failure Report</h2>'
+            fail_block = '<h2 style="margin:31px 0 11px;font-size:17px;color:#b71c1c">🚨 Detailed Failure Report</h2>'
             for t in failing_tests:
-              fail_block += f'<div style="border:1px solid #ffcdd2; margin-bottom:20px; padding:16px;"><strong>{t["name"]}</strong><br>{t["message"]}</div>'
+              fail_block += f"""
+              <div style="border:1px solid #ffcdd2; border-radius:7px; margin-bottom:19px; background:#fff; padding:15px;">
+                <p style="margin:0; font-size:13px; font-weight:700; color:#b71c1c">{t['name']}</p>
+                <p style="margin:1px 0 9px; font-size:10px; color:#666;">{t['class']} &middot; Severity: {t['severity']}</p>
+                <div style="background:#f8f9fa; padding:11px; border-radius:4px; font-family:monospace; font-size:11px; border-left:3px solid #b71c1c; color:#c62828">{t['message']}</div>
+              </div>"""
 
-          html = f"""<html><body><h1>API Test Results: {status} {s_icon}</h1>{fail_block}</body></html>"""
-          msg = MIMEMultipart("alternative"); msg["Subject"] = f"{s_icon} Run Result {status}"; msg.attach(MIMEText(html, "html"))
+          html = f"""<!DOCTYPE html><html><body style="margin:0;padding:20px;background:#f4f6f9;font-family:Arial,sans-serif">
+          <div style="max-width:601px;margin:0 auto;background:#fff;border-radius:9px;overflow:hidden;border:1px solid #e8eaf0">
+            <div style="background:#1a237e;padding:27px;color:#fff"><h1 style="margin:0;font-size:23px">API Test Build {status}</h1></div>
+            <div style="background:{s_bg};padding:19px;border-left:5px solid {s_color}"><p style="margin:0;font-size:19px;font-weight:700;color:{s_color}">{s_icon} Build {status} on {timestamp}</p></div>
+            <div style="padding:27px">
+              <table width="100%" style="margin-bottom:27px;font-size:13px;border-collapse:collapse">
+                <tr style="background:#f5f7ff"><td style="padding:10px;font-weight:700;border-bottom:1px solid #e8eaf0">Metric</td><td style="padding:10px;font-weight:700;border-bottom:1px solid #e8eaf0">Value</td></tr>
+                <tr><td style="padding:10px;border-bottom:1px solid #f0f0f0">Repository</td><td style="padding:10px;border-bottom:1px solid #f0f0f0">${{ github.repository }}</td></tr>
+                <tr><td style="padding:10px;border-bottom:1px solid #f0f0f0">Branch</td><td style="padding:10px;border-bottom:1px solid #f0f0f0">${{ github.ref_name }}</td></tr>
+                <tr><td style="padding:10px;border-bottom:1px solid #f0f0f0">Pass Rate</td><td style="padding:10px;border-bottom:1px solid #f0f0f0"><strong>{pass_pct}%</strong></td></tr>
+              </table>
+              <div style="display:flex;justify-content:space-around;text-align:center;margin-bottom:27px">
+                <div style="flex:1;background:#e8f5e9;padding:15px;margin:4px;border-radius:7px"><div style="font-size:23px;font-weight:700;color:#2e7d32">{passed}</div><div style="font-size:10px;color:#555">PASSED</div></div>
+                <div style="flex:1;background:#ffebee;padding:15px;margin:4px;border-radius:7px"><div style="font-size:23px;font-weight:700;color:#b71c1c">{failed}</div><div style="font-size:10px;color:#555">FAILED</div></div>
+              </div>
+              {fail_block}
+              <div style="text-align:center;margin-top:31px"><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" style="display:inline-block;background:#1a237e;color:#fff;text-decoration:none;padding:13px 27px;border-radius:5px;font-weight:700">View Build Results</a></div>
+            </div>
+          </div></body></html>"""
+
+          msg = MIMEMultipart("alternative"); msg["Subject"] = f"{s_icon} Build {status}: Run #${{ github.run_number }}"; msg.attach(MIMEText(html, "html"))
           with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
               server.login(gmail_user, gmail_pass); server.sendmail(gmail_user, report_to, msg.as_string())
           PYEOF
 
+      # 11. Slack Notification (Rich Blocks)
       - name: Send Slack report
         if: always()
         env:
@@ -211,13 +206,27 @@ jobs:
           import json, os, subprocess, sys; from glob import glob
           webhook = os.environ.get("SLACK_WEBHOOK_URL", "")
           if not webhook: sys.exit(0)
-          total, passed, failed = "${{ steps.parse-results.outputs.total }}", "${{ steps.parse-results.outputs.passed }}", "${{ steps.parse-results.outputs.failed }}"
-          is_pass = (int(failed) == 0); status_emoji = "✅" if is_pass else "❌"
-          payload = {"text": f"{status_emoji} API Tests: {passed}/{total} passed"}
+          total, passed, failed, pass_pct = "${{ steps.parse-results.outputs.total }}", "${{ steps.parse-results.outputs.passed }}", "${{ steps.parse-results.outputs.failed }}", "${{ steps.parse-results.outputs.pass_pct }}"
+          is_pass = (int(failed or 1) == 0 and int(total or 0) > 0); status_emoji = "✅" if is_pass else "❌"
+          status_text = "PASSED" if is_pass else "FAILED"
+          color = "#2e7d32" if is_pass else "#e01e5a"
+          
+          blocks = [
+            {"type": "header", "text": {"type": "plain_text", "text": f"{status_emoji} API Tests {status_text}", "emoji": True}},
+            {"type": "section", "fields": [
+              {"type": "mrkdwn", "text": f"*Repo:*\n${{ github.repository }}"},
+              {"type": "mrkdwn", "text": f"*Branch:*\n${{ github.ref_name }}"},
+              {"type": "mrkdwn", "text": f"*Summary:*\n*{passed}/{total}* Passed ({pass_pct}%)"},
+              {"type": "mrkdwn", "text": f"*Run:*\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|#{os.environ.get('GITHUB_RUN_NUMBER', '0')}>"}
+            ]},
+            {"type": "actions", "elements": [{"type": "button", "text": {"type": "plain_text", "text": "View Full Report"}, "url": f"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}", "style": "primary"}]}
+          ]
+          
+          payload = {"attachments": [{"color": color, "blocks": blocks}]}
           subprocess.run(["curl", "-s", "-X", "POST", webhook, "-H", "Content-Type: application/json", "-d", json.dumps(payload)])
           PYEOF
 
-      # 11. Fail the build if any tests actually failed
+      # 12. Fail Build
       - name: Fail build on test failures
         if: steps.run-tests.outcome == 'failure'
         run: exit 1
@@ -230,28 +239,21 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
-      - name: Lowercase Repository Owner
-        run: |
-          echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
-
+      - name: Lowercase Repository Name
+        run: echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
       - name: Build and Push Docker Image
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          tags: |
-            ${{ env.IMAGE_NAME }}:latest
-            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          tags: ${{ env.IMAGE_NAME }}:latest, ${{ env.IMAGE_NAME }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
