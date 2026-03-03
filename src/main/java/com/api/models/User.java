@@ -3,9 +3,6 @@ package com.api.models;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-/**
- * User model representing a user resource from Divine's API
- */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class User {
 
