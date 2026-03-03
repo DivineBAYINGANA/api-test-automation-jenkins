@@ -1,9 +1,5 @@
 package com.api.config;
 
-/**
- * API Configuration constants for Divine's API Testing Framework
- * Base URL: https://jsonplaceholder.typicode.com (sample REST API)
- */
 public class ApiConfig {
 
     // ===================== BASE URLS =====================
