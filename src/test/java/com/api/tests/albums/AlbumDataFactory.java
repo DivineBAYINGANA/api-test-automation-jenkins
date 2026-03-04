@@ -1,4 +1,4 @@
-package com.api.utils;
+package com.api.tests.albums;
 
 public class AlbumDataFactory {
     public static final int EXPECTED_ALBUM_COUNT = 100;

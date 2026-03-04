@@ -2,7 +2,6 @@ package com.api.tests.posts;
 
 import com.api.config.ApiConfig;
 import com.api.base.TestBase;
-import com.api.utils.PostDataFactory;
 import io.qameta.allure.*;
 import io.restassured.module.jsv.JsonSchemaValidator;
 import io.restassured.response.Response;

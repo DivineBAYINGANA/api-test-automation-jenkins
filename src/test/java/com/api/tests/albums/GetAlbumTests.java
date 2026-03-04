@@ -2,7 +2,6 @@ package com.api.tests.albums;
 
 import com.api.config.ApiConfig;
 import com.api.base.TestBase;
-import com.api.utils.AlbumDataFactory;
 import io.qameta.allure.*;
 import org.junit.jupiter.api.*;
 

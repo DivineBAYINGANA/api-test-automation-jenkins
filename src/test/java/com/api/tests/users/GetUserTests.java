@@ -2,7 +2,6 @@ package com.api.tests.users;
 
 import com.api.config.ApiConfig;
 import com.api.base.TestBase;
-import com.api.utils.UserDataFactory;
 import io.qameta.allure.*;
 import io.restassured.module.jsv.JsonSchemaValidator;
 import org.junit.jupiter.api.*;

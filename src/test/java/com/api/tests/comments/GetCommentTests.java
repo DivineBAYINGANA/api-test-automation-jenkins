@@ -2,7 +2,7 @@ package com.api.tests.comments;
 
 import com.api.config.ApiConfig;
 import com.api.base.TestBase;
-import com.api.utils.PostDataFactory;
+import com.api.tests.posts.PostDataFactory;
 import io.qameta.allure.*;
 import org.junit.jupiter.api.*;
 

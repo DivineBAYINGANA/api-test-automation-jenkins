@@ -2,7 +2,6 @@ package com.api.tests.posts;
 
 import com.api.config.ApiConfig;
 import com.api.base.TestBase;
-import com.api.utils.PostDataFactory;
 import io.qameta.allure.*;
 import io.restassured.response.Response;
 import org.junit.jupiter.api.*;
@@ -25,7 +24,7 @@ public class CreatePostTests extends TestBase {
     @ParameterizedTest(name = "POST /posts — valid payload {0}")
     @Order(1)
     @AllureId("P-001")
-    @MethodSource("com.api.utils.PostDataFactory#validPostProvider")
+    @MethodSource("com.api.tests.posts.PostDataFactory#validPostProvider")
     @Severity(SeverityLevel.BLOCKER)
     @Description("API: POST /posts. Validates that various valid payloads return HTTP 201 Created.")
     void testCreatePost_WithValidPayload_ShouldReturn201(Map<String, Object> payload) {
