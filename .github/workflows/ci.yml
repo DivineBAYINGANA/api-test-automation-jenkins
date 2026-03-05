@@ -269,41 +269,102 @@ jobs:
           import json, os, subprocess, sys, re, glob
           webhook = os.environ.get("SLACK_WEBHOOK_URL", "")
           if not webhook: sys.exit(0)
-          total, passed, failed, pass_pct = "${{ steps.parse-results.outputs.total }}", "${{ steps.parse-results.outputs.passed }}", "${{ steps.parse-results.outputs.failed }}", "${{ steps.parse-results.outputs.pass_pct }}"
-          is_pass = (int(failed or 1) == 0 and int(total or 0) > 0); status_emoji = "✅" if is_pass else "❌"
+
+          total     = "${{ steps.parse-results.outputs.total }}"    or "0"
+          passed    = "${{ steps.parse-results.outputs.passed }}"   or "0"
+          failed    = "${{ steps.parse-results.outputs.failed }}"   or "0"
+          skipped   = "${{ steps.parse-results.outputs.skipped }}"  or "0"
+          pass_pct  = "${{ steps.parse-results.outputs.pass_pct }}" or "0"
+
+          is_pass = (int(failed) == 0 and int(total) > 0)
+          status_emoji = "✅" if is_pass else "❌"
           status_text = "PASSED" if is_pass else "FAILED"
           color = "#2e7d32" if is_pass else "#e01e5a"
-          
-          fail_details = ""
-          if not is_pass:
-              fail_details = "\n*🚨 Failing Tests:*"
-              for json_file in sorted(glob.glob("target/allure-results/*-result.json")):
-                  try:
-                      with open(json_file, 'r', encoding='utf-8') as f: data = json.load(f)
-                      if data.get("status") in ["failed", "broken"]:
-                          name = data.get("name")
-                          msg = data.get("statusDetails", {}).get("message", "N/A")
-                          expected = re.search(r"Expected:\s*<(.*?)>", msg)
-                          actual = re.search(r"(?:Actual|but was):\s*<(.*?)>", msg)
-                          exp_val = expected.group(1) if expected else "?"
-                          act_val = actual.group(1) if actual else "?"
-                          fail_details += f"\n• *{name}*: Expected `{exp_val}`, but got `{act_val}`"
-                  except: continue
 
+          # Extract detailed failures
+          fail_blocks = []
+          for json_file in sorted(glob.glob("target/allure-results/*-result.json")):
+              try:
+                  with open(json_file, 'r', encoding='utf-8') as f: data = json.load(f)
+                  if data.get("status") in ["failed", "broken"]:
+                      name = data.get("name")
+                      desc = data.get("description", "No description provided.")
+                      full_msg = data.get("statusDetails", {}).get("message", "N/A")
+                      
+                      # Extract labels
+                      labels = {l["name"]: l["value"] for l in data.get("labels", [])}
+                      allure_id = labels.get("allureId", "N/A")
+                      severity = labels.get("severity", "normal").upper()
+                      
+                      # Extract expected/actual
+                      expected = re.search(r"Expected:\s*<(.*?)>", full_msg)
+                      actual = re.search(r"(?:Actual|but was):\s*<(.*?)>", full_msg)
+                      exp_val = expected.group(1) if expected else "N/A"
+                      act_val = actual.group(1) if actual else "N/A"
+                      
+                      # Try to find endpoint in description (common pattern in this project)
+                      endpoint = "Unknown"
+                      ep_match = re.search(r"API:\s*([^\s\.\n]+)", desc)
+                      if ep_match: endpoint = ep_match.group(1)
+                      
+                      # Build failure block
+                      fail_blocks.append({
+                          "type": "section",
+                          "text": {
+                              "type": "mrkdwn",
+                              "text": f"*ID:* `{allure_id}` | *Name:* `{name}`\n*Severity:* `{severity}` | *Endpoint:* `{endpoint}`\n*Description:* {desc}\n*Failure:* {full_msg[:150]}...\n*Expected:* `{exp_val}`\n*Actual:* `{act_val}`"
+                          }
+                      })
+                      fail_blocks.append({"type": "divider"})
+              except: continue
+
+          # Build payload
           blocks = [
-            {"type": "header", "text": {"type": "plain_text", "text": f"{status_emoji} API Tests {status_text}", "emoji": True}},
-            {"type": "section", "text": {"type": "mrkdwn", "text": f"*Summary:*\n*{passed}/{total}* Passed ({pass_pct}%)"}},
-            {"type": "section", "fields": [
-              {"type": "mrkdwn", "text": f"*Repo:*\n${{ github.repository }}"},
-              {"type": "mrkdwn", "text": f"*Branch:*\n${{ github.ref_name }}"}
-            ]}
+              {
+                  "type": "header",
+                  "text": {"type": "plain_text", "text": f"{status_emoji} API Tests {status_text}", "emoji": True}
+              },
+              {
+                  "type": "section",
+                  "fields": [
+                      {"type": "mrkdwn", "text": f"*Total:* {total}"},
+                      {"type": "mrkdwn", "text": f"*Passed:* {passed} {status_emoji}"},
+                      {"type": "mrkdwn", "text": f"*Failed:* {failed} {'🚨' if not is_pass else ''}"},
+                      {"type": "mrkdwn", "text": f"*Skipped:* {skipped} ℹ️"},
+                      {"type": "mrkdwn", "text": f"*Pass Rate:* {pass_pct}%"}
+                  ]
+              },
+              {
+                  "type": "section",
+                  "fields": [
+                      {"type": "mrkdwn", "text": f"*Repo:* ${{ github.repository }}"},
+                      {"type": "mrkdwn", "text": f"*Branch:* ${{ github.ref_name }}"}
+                  ]
+              },
+              {"type": "divider"}
           ]
-          
-          if fail_details:
-              blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": fail_details}})
-              
-          blocks.append({"type": "actions", "elements": [{"type": "button", "text": {"type": "plain_text", "text": "View Full Results"}, "url": f"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}", "style": "primary"}]})
-          
+
+          if fail_blocks:
+              blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "*🚨 Detailed Failure Report:*"}})
+              blocks.extend(fail_blocks[:20]) # Limit to 20 failures to avoid Slack block limits
+
+          blocks.append({
+              "type": "actions",
+              "elements": [
+                  {
+                      "type": "button",
+                      "text": {"type": "plain_text", "text": "View Allure Report"},
+                      "url": "https://divinebayingana.github.io/api-test-automation/",
+                      "style": "primary"
+                  },
+                  {
+                      "type": "button",
+                      "text": {"type": "plain_text", "text": "GitHub Action Run"},
+                      "url": f"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+                  }
+              ]
+          })
+
           payload = {"attachments": [{"color": color, "blocks": blocks}]}
           subprocess.run(["curl", "-s", "-X", "POST", webhook, "-H", "Content-Type: application/json", "-d", json.dumps(payload)])
           PYEOF
