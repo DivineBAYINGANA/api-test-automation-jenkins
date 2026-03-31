@@ -62,67 +62,71 @@ pipeline {
     post {
         always {
             script {
-                // ── 1. Parse surefire XML for test counts ──────────────────────
-                def total = 0, passedCount = 0, failedCount = 0, skippedCount = 0
-                try {
-                    def xmlFiles = findFiles(glob: 'target/surefire-reports/TEST-*.xml')
-                    xmlFiles.each { f ->
-                        def xml  = new XmlSlurper().parseText(readFile(f.path))
-                        def t    = xml.@tests.toString().toInteger()
-                        def fa   = xml.@failures.toString().toInteger()
-                        def errs = xml.@errors.toString().toInteger()
-                        def sk   = xml.@skipped.toString().toInteger()
-                        total        += t
-                        failedCount  += fa + errs
-                        skippedCount += sk
-                    }
-                    passedCount = total - failedCount - skippedCount
-                } catch (Exception ex) {
-                    echo "Warning: Could not parse surefire reports: ${ex.message}"
-                }
-                def passPct = total > 0 ? (int)((passedCount / total) * 100) : 0
+                // ── 1 & 2. Parse surefire XML + allure JSON via PowerShell ────
+                writeFile file: 'parse-results.ps1', text: '''
+$ErrorActionPreference = "SilentlyContinue"
+$total = 0; $failedCount = 0; $skippedCount = 0
 
-                // ── 2. Parse allure results for failure details ────────────────
+foreach ($f in (Get-ChildItem -Path "target/surefire-reports" -Filter "TEST-*.xml" -Recurse -ErrorAction SilentlyContinue)) {
+    try {
+        [xml]$xml  = Get-Content $f.FullName -Encoding UTF8
+        $s          = $xml.testsuite
+        $total       += [int]$s.tests
+        $failedCount += [int]$s.failures + [int]$s.errors
+        $skippedCount += [int]$s.skipped
+    } catch {}
+}
+$passedCount = $total - $failedCount - $skippedCount
+$passPct = if ($total -gt 0) { [math]::Floor($passedCount * 100 / $total) } else { 0 }
+
+$failTests = [System.Collections.Generic.List[object]]::new()
+foreach ($f in (Get-ChildItem -Path "target/allure-results" -Filter "*-result.json" -Recurse -ErrorAction SilentlyContinue)) {
+    try {
+        $d = Get-Content $f.FullName -Encoding UTF8 -Raw | ConvertFrom-Json
+        if ($d.status -eq "failed" -or $d.status -eq "broken") {
+            $lm = @{}
+            if ($d.labels) { $d.labels | ForEach-Object { $lm[$_.name] = $_.value } }
+            $msg   = if ($d.statusDetails -and $d.statusDetails.message) { $d.statusDetails.message } else { "N/A" }
+            $short = if ($msg.Length -gt 250) { $msg.Substring(0, 250) + "..." } else { $msg }
+            $exp = "N/A"; $act = "N/A"
+            if ($msg -match "Expected:\s*<(.*?)>")           { $exp = $Matches[1] }
+            if ($msg -match "(?:Actual|but was):\s*<(.*?)>") { $act = $Matches[1] }
+            $failTests.Add([pscustomobject]@{
+                id          = if ($lm["allureId"])  { $lm["allureId"] }           else { "N/A" }
+                name        = if ($d.name)          { $d.name }                   else { "Unknown" }
+                description = if ($d.description)  { $d.description }             else { "" }
+                severity    = if ($lm["severity"])  { $lm["severity"].ToUpper() } else { "NORMAL" }
+                message     = $short
+                expected    = $exp
+                actual      = $act
+            })
+        }
+    } catch {}
+}
+
+[pscustomobject]@{
+    total        = $total
+    passed       = $passedCount
+    failed       = $failedCount
+    skipped      = $skippedCount
+    passPct      = $passPct
+    failingTests = @($failTests)
+} | ConvertTo-Json -Depth 5 | Out-File "test-results.json" -Encoding UTF8
+'''
+                bat 'powershell -ExecutionPolicy Bypass -File parse-results.ps1'
+
+                def parsed       = new groovy.json.JsonSlurper().parseText(readFile('test-results.json'))
+                def total        = (parsed.total   as int) ?: 0
+                def passedCount  = (parsed.passed  as int) ?: 0
+                def failedCount  = (parsed.failed  as int) ?: 0
+                def skippedCount = (parsed.skipped as int) ?: 0
+                def passPct      = (parsed.passPct as int) ?: 0
+                def failingTests = parsed.failingTests instanceof List ? parsed.failingTests : []
+
                 def esc = { s ->
                     s?.toString()
-                     ?.replace('&', '&amp;')
-                     ?.replace('<', '&lt;')
-                     ?.replace('>', '&gt;')
-                     ?.replace('"', '&quot;') ?: ''
-                }
-
-                def failingTests = []
-                try {
-                    def jsonFiles = findFiles(glob: 'target/allure-results/*-result.json')
-                    jsonFiles.each { f ->
-                        try {
-                            def data = new groovy.json.JsonSlurper().parseText(readFile(f.path))
-                            if (data.status in ['failed', 'broken']) {
-                                def labelsMap = [:]
-                                data.labels?.each { l -> labelsMap[l.name] = l.value }
-
-                                def fullMsg = data?.statusDetails?.message ?: 'N/A'
-                                def shortMsg = fullMsg.length() > 250 ? fullMsg[0..249] + '...' : fullMsg
-
-                                def expMatcher = fullMsg =~ /Expected:\s*<(.*?)>/
-                                def actMatcher = fullMsg =~ /(?:Actual|but was):\s*<(.*?)>/
-                                def expVal = expMatcher.find() ? expMatcher.group(1) : 'N/A'
-                                def actVal = actMatcher.find() ? actMatcher.group(1) : 'N/A'
-
-                                failingTests << [
-                                    id         : labelsMap['allureId'] ?: 'N/A',
-                                    name       : data.name ?: 'Unknown',
-                                    description: data.description ?: '',
-                                    severity   : (labelsMap['severity'] ?: 'normal').toUpperCase(),
-                                    message    : shortMsg,
-                                    expected   : expVal,
-                                    actual     : actVal
-                                ]
-                            }
-                        } catch (Exception ignored) {}
-                    }
-                } catch (Exception ex) {
-                    echo "Warning: Could not parse allure results: ${ex.message}"
+                     ?.replace('&', '&amp;')?.replace('<', '&lt;')
+                     ?.replace('>', '&gt;')?.replace('"', '&quot;') ?: ''
                 }
 
                 // ── 3. Build status context ────────────────────────────────────
