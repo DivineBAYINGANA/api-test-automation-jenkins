@@ -74,6 +74,7 @@ pipeline {
                         color: '#36a64f',
                         channel: '#jenkins-notifications',
                         botUser: false,
+                        baseUrl: 'https://hooks.slack.com/services/',
                         message: """✅ *BUILD PASSED*
 *Job:* ${env.JOB_NAME}
 *Build #:* ${env.BUILD_NUMBER}
@@ -100,7 +101,7 @@ Build completed successfully with all tests passing! 🎉"""
                     def testSummary = currentBuild.result == 'SUCCESS' ? 'All tests passed ✅' : 'Tests executed'
                     withCredentials([string(credentialsId: 'recipient-email', variable: 'RECIPIENT')]) {
                     mail(
-                        to: "${RECIPIENT}",
+                        to: RECIPIENT,
                         subject: "✅ BUILD PASSED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
                         mimeType: 'text/html',
                         body: """
@@ -190,6 +191,7 @@ Build completed successfully with all tests passing! 🎉"""
                         color: '#d32f2f',
                         channel: '#jenkins-notifications',
                         botUser: false,
+                        baseUrl: 'https://hooks.slack.com/services/',
                         message: """❌ *BUILD FAILED*
 *Job:* ${env.JOB_NAME}
 *Build #:* ${env.BUILD_NUMBER}
@@ -215,7 +217,7 @@ Please investigate and fix the build issues. Check the logs for more details. �
                 try {
                     withCredentials([string(credentialsId: 'recipient-email', variable: 'RECIPIENT')]) {
                     mail(
-                        to: "${RECIPIENT}",
+                        to: RECIPIENT,
                         subject: "❌ BUILD FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
                         mimeType: 'text/html',
                         body: """
@@ -322,6 +324,7 @@ Please investigate and fix the build issues. Check the logs for more details. �
                         color: '#ff9800',
                         channel: '#jenkins-notifications',
                         botUser: false,
+                        baseUrl: 'https://hooks.slack.com/services/',
                         message: """⚠️  *BUILD UNSTABLE*
 *Job:* ${env.JOB_NAME}
 *Build #:* ${env.BUILD_NUMBER}
@@ -345,7 +348,7 @@ Please review test results and fix any failing tests. ⚠️"""
                 try {
                     withCredentials([string(credentialsId: 'recipient-email', variable: 'RECIPIENT')]) {
                     mail(
-                        to: "${RECIPIENT}",
+                        to: RECIPIENT,
                         subject: "⚠️  BUILD UNSTABLE: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
                         mimeType: 'text/html',
                         body: """
@@ -405,7 +408,7 @@ Please review test results and fix any failing tests. ⚠️"""
                 echo "========== UNSTABLE NOTIFICATIONS COMPLETE =========="
             }
         }
-        always {
+        cleanup {
             echo "========== PIPELINE CLEANUP =========="
             cleanWs(deleteDirs: true, patterns: [[pattern: 'parse-results.ps1, slack-payload.json', type: 'INCLUDE']])
             echo "========== PIPELINE COMPLETE =========="
