@@ -1,7 +1,3 @@
-# Jenkins Pipeline for API Test Automation
-
-This Jenkinsfile defines a declarative pipeline for running REST Assured API tests in a Maven project. It includes steps for pulling code, building, testing, archiving reports, and sending notifications.
-
 #!/usr/bin/env groovy
 
 pipeline {
