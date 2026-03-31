@@ -204,7 +204,8 @@ pipeline {
                 try {
                     withCredentials([
                         string(credentialsId: 'gmail-address',      variable: 'GMAIL_USER'),
-                        string(credentialsId: 'gmail-app-password', variable: 'GMAIL_PASS')
+                        string(credentialsId: 'gmail-app-password', variable: 'GMAIL_PASS'),
+                        string(credentialsId: 'recipient-email',    variable: 'REPORT_TO')
                     ]) {
                         def failBlock = ''
                         if (failingTests) {
@@ -301,7 +302,7 @@ pipeline {
 \$smtp = New-Object Net.Mail.SmtpClient('smtp.gmail.com', 587)
 \$smtp.EnableSsl = \$true
 \$smtp.Credentials = New-Object Net.NetworkCredential(\$env:GMAIL_USER, \$env:GMAIL_PASS)
-\$msg = New-Object Net.Mail.MailMessage(\$env:GMAIL_USER, 'divinegihozo@gmail.com')
+\$msg = New-Object Net.Mail.MailMessage(\$env:GMAIL_USER, \$env:REPORT_TO)
 \$msg.Subject = "${emailSubject}"
 \$msg.IsBodyHtml = \$true
 \$msg.Body = [IO.File]::ReadAllText((Join-Path (Get-Location) 'email-body.html'), [Text.Encoding]::UTF8)
