@@ -1,36 +1,62 @@
 #!/usr/bin/env groovy
 
+// ── Parses one surefire XML string — runs outside CPS so XmlParser works safely
 @NonCPS
-def getTestSummary(def build) {
-    def summary = [total: 0, passed: 0, failed: 0, skipped: 0, failedTests: []]
+def parseSurefireXml(String content) {
+    def result = [total: 0, failed: 0, skipped: 0, cases: []]
     try {
-        def action = build.testResultAction
-        if (action != null) {
-            summary.total   = action.totalCount
-            summary.failed  = action.failCount
-            summary.skipped = action.skipCount
-            summary.passed  = summary.total - summary.failed - summary.skipped
-            for (def test : action.failedTests) {
-                def raw = test.className ?: 'Unknown'
-                def simpleName = raw.contains('.')
-                    ? raw.substring(raw.lastIndexOf('.') + 1)
-                    : raw
-                def impact = simpleName
-                    .replaceAll('Test$', '')
-                    .replaceAll(/(?<=[a-z])(?=[A-Z])/, ' ')
-                    .trim()
-                def message = (test.errorDetails ?: 'No error details')
-                    .split('\n')[0]
-                    .trim()
-                summary.failedTests << [
-                    name     : test.name      ?: 'Unknown Test',
-                    className: simpleName,
-                    message  : message,
-                    impact   : impact ?: simpleName
-                ]
+        def suite = new XmlParser().parseText(content)
+        result.total   = (suite.attribute('tests')    ?: '0').toInteger()
+        result.failed  = (suite.attribute('failures') ?: '0').toInteger() +
+                         (suite.attribute('errors')   ?: '0').toInteger()
+        result.skipped = (suite.attribute('skipped')  ?: '0').toInteger()
+        for (def tc : suite.children()) {
+            if (tc.name() != 'testcase') continue
+            for (def child : tc.children()) {
+                if (child.name() == 'failure' || child.name() == 'error') {
+                    def rawClass   = tc.attribute('classname') ?: 'Unknown'
+                    def simpleName = rawClass.contains('.')
+                        ? rawClass.substring(rawClass.lastIndexOf('.') + 1)
+                        : rawClass
+                    def impact = simpleName
+                        .replaceAll('Test$', '')
+                        .replaceAll(/(?<=[a-z])(?=[A-Z])/, ' ')
+                        .trim()
+                    def msg = (child.attribute('message') ?: child.text() ?: 'No details')
+                        .split('\n')[0].trim()
+                    result.cases << [
+                        name     : tc.attribute('name') ?: 'Unknown',
+                        className: simpleName,
+                        message  : msg,
+                        impact   : (impact ?: simpleName)
+                    ]
+                    break
+                }
             }
         }
     } catch (Exception ignored) {}
+    return result
+}
+
+// ── Reads surefire files via pipeline steps, delegates XML work to @NonCPS above
+def getTestSummary() {
+    def summary = [total: 0, passed: 0, failed: 0, skipped: 0, failedTests: []]
+    try {
+        def files = findFiles(glob: 'target/surefire-reports/TEST-*.xml')
+        for (def file : files) {
+            def content = readFile(file.path)
+            def parsed  = parseSurefireXml(content)
+            summary.total   += parsed.total
+            summary.failed  += parsed.failed
+            summary.skipped += parsed.skipped
+            for (def c : parsed.cases) {
+                summary.failedTests << c
+            }
+        }
+        summary.passed = summary.total - summary.failed - summary.skipped
+    } catch (Exception e) {
+        echo "⚠️  Could not parse surefire reports: ${e.message}"
+    }
     return summary
 }
 
@@ -79,16 +105,15 @@ pipeline {
                     catchError(buildResult: currentBuild.result ?: 'SUCCESS', stageResult: 'UNSTABLE') {
                         bat 'mvn allure:report -B'
                     }
-
                     if (fileExists('target/site/allure-maven-plugin/index.html')) {
                         echo "Allure report found and publishing..."
                         publishHTML([
-                            allowMissing: true,
+                            allowMissing         : true,
                             alwaysLinkToLastBuild: true,
-                            keepAll: true,
-                            reportDir: 'target/site/allure-maven-plugin',
-                            reportFiles: 'index.html',
-                            reportName: 'Allure Report'
+                            keepAll              : true,
+                            reportDir            : 'target/site/allure-maven-plugin',
+                            reportFiles          : 'index.html',
+                            reportName           : 'Allure Report'
                         ])
                     } else {
                         echo "Warning: Allure report not found at expected location."
@@ -102,7 +127,7 @@ pipeline {
         success {
             script {
                 echo "========== SENDING SUCCESS NOTIFICATIONS =========="
-                def ts = getTestSummary(currentBuild)
+                def ts = getTestSummary()
 
                 // ── Slack ──────────────────────────────────────────────
                 echo "[1/3] Sending Slack notification..."
@@ -160,20 +185,17 @@ All tests passed — great work! 🎉"""
         .value { color: #666; }
         .stats-table { width: 100%; border-collapse: collapse; margin: 10px 0; }
         .stats-table td { padding: 10px 14px; border: 1px solid #ddd; text-align: center; font-size: 15px; }
-        .stat-total  { background: #e8f4fd; font-weight: bold; }
-        .stat-pass   { background: #d4edda; color: #155724; font-weight: bold; }
-        .stat-fail   { background: #f8d7da; color: #721c24; font-weight: bold; }
-        .stat-skip   { background: #fff3cd; color: #856404; font-weight: bold; }
+        .stat-total { background: #e8f4fd; font-weight: bold; }
+        .stat-pass  { background: #d4edda; color: #155724; font-weight: bold; }
+        .stat-fail  { background: #f8d7da; color: #721c24; font-weight: bold; }
+        .stat-skip  { background: #fff3cd; color: #856404; font-weight: bold; }
         .footer { margin-top: 30px; font-size: 12px; color: #999; border-top: 1px solid #ddd; padding-top: 10px; }
         a { color: #0066cc; text-decoration: none; }
-        a:hover { text-decoration: underline; }
         .status-success { color: #28a745; font-weight: bold; }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h2>✅ Build Passed Successfully</h2>
-    </div>
+    <div class="header"><h2>✅ Build Passed Successfully</h2></div>
 
     <div class="section">
         <h3>Build Information</h3>
@@ -232,19 +254,17 @@ All tests passed — great work! 🎉"""
         failure {
             script {
                 echo "========== SENDING FAILURE NOTIFICATIONS =========="
-                def ts = getTestSummary(currentBuild)
+                def ts = getTestSummary()
 
-                // ── Build failed test list for Slack ───────────────────
                 def slackFailedList = ''
                 if (ts.failedTests.size() > 0) {
                     ts.failedTests.eachWithIndex { t, i ->
                         slackFailedList += "\n${i + 1}. ❌ *${t.name}* — ${t.className}\n   📝 *Description:* ${t.message}\n   ⚠️ *Impact:* ${t.impact}\n"
                     }
                 } else {
-                    slackFailedList = '\nNo individual test data available — check console output.\n'
+                    slackFailedList = '\nNo test failures detected — build failed at a non-test stage. Check console output.\n'
                 }
 
-                // ── Build failed test rows for Email ───────────────────
                 def emailFailedRows = ''
                 if (ts.failedTests.size() > 0) {
                     ts.failedTests.eachWithIndex { t, i ->
@@ -259,7 +279,7 @@ All tests passed — great work! 🎉"""
                         </tr>"""
                     }
                 } else {
-                    emailFailedRows = '<tr><td colspan="5" style="padding:10px;border:1px solid #ddd;text-align:center;">No individual test data available — check console output.</td></tr>'
+                    emailFailedRows = '<tr><td colspan="5" style="padding:10px;border:1px solid #ddd;text-align:center;">No test failures detected — build failed at a non-test stage. Check console output.</td></tr>'
                 }
 
                 // ── Slack ──────────────────────────────────────────────
@@ -319,23 +339,20 @@ Please investigate and fix the build issues. ⛔"""
         .value { color: #666; }
         .stats-table { width: 100%; border-collapse: collapse; margin: 10px 0; }
         .stats-table td { padding: 10px 14px; border: 1px solid #ddd; text-align: center; font-size: 15px; }
-        .stat-total  { background: #e8f4fd; font-weight: bold; }
-        .stat-pass   { background: #d4edda; color: #155724; font-weight: bold; }
-        .stat-fail   { background: #f8d7da; color: #721c24; font-weight: bold; }
-        .stat-skip   { background: #fff3cd; color: #856404; font-weight: bold; }
+        .stat-total { background: #e8f4fd; font-weight: bold; }
+        .stat-pass  { background: #d4edda; color: #155724; font-weight: bold; }
+        .stat-fail  { background: #f8d7da; color: #721c24; font-weight: bold; }
+        .stat-skip  { background: #fff3cd; color: #856404; font-weight: bold; }
         .failures-table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13px; }
         .failures-table th { background: #d32f2f; color: white; padding: 10px; text-align: left; border: 1px solid #c0392b; }
         .warning-box { background-color: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 4px; margin: 15px 0; }
         .footer { margin-top: 30px; font-size: 12px; color: #999; border-top: 1px solid #ddd; padding-top: 10px; }
         a { color: #0066cc; text-decoration: none; }
-        a:hover { text-decoration: underline; }
         .status-failure { color: #d32f2f; font-weight: bold; }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h2>❌ Build Failed — Action Required</h2>
-    </div>
+    <div class="header"><h2>❌ Build Failed — Action Required</h2></div>
 
     <div class="warning-box">
         <strong>⚠️ ALERT:</strong> Your build has failed. Please review the errors below and take appropriate action.
@@ -367,11 +384,7 @@ Please investigate and fix the build issues. ⛔"""
         <h3>❌ Failed Tests</h3>
         <table class="failures-table">
             <tr>
-                <th>#</th>
-                <th>Test Name</th>
-                <th>Class</th>
-                <th>Description</th>
-                <th>Impact</th>
+                <th>#</th><th>Test Name</th><th>Class</th><th>Description</th><th>Impact</th>
             </tr>
             ${emailFailedRows}
         </table>
@@ -423,9 +436,8 @@ Please investigate and fix the build issues. ⛔"""
         unstable {
             script {
                 echo "========== SENDING UNSTABLE BUILD NOTIFICATIONS =========="
-                def ts = getTestSummary(currentBuild)
+                def ts = getTestSummary()
 
-                // ── Build failed test list for Slack ───────────────────
                 def slackFailedList = ''
                 if (ts.failedTests.size() > 0) {
                     ts.failedTests.eachWithIndex { t, i ->
@@ -435,7 +447,6 @@ Please investigate and fix the build issues. ⛔"""
                     slackFailedList = '\nNo individual test data available — check the Allure Report.\n'
                 }
 
-                // ── Build failed test rows for Email ───────────────────
                 def emailFailedRows = ''
                 if (ts.failedTests.size() > 0) {
                     ts.failedTests.eachWithIndex { t, i ->
@@ -507,22 +518,19 @@ Please review and fix the failing tests. ⚠️"""
         .value { color: #666; }
         .stats-table { width: 100%; border-collapse: collapse; margin: 10px 0; }
         .stats-table td { padding: 10px 14px; border: 1px solid #ddd; text-align: center; font-size: 15px; }
-        .stat-total  { background: #e8f4fd; font-weight: bold; }
-        .stat-pass   { background: #d4edda; color: #155724; font-weight: bold; }
-        .stat-fail   { background: #f8d7da; color: #721c24; font-weight: bold; }
-        .stat-skip   { background: #fff3cd; color: #856404; font-weight: bold; }
+        .stat-total { background: #e8f4fd; font-weight: bold; }
+        .stat-pass  { background: #d4edda; color: #155724; font-weight: bold; }
+        .stat-fail  { background: #f8d7da; color: #721c24; font-weight: bold; }
+        .stat-skip  { background: #fff3cd; color: #856404; font-weight: bold; }
         .failures-table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13px; }
         .failures-table th { background: #e65100; color: white; padding: 10px; text-align: left; border: 1px solid #bf360c; }
         .footer { margin-top: 30px; font-size: 12px; color: #999; border-top: 1px solid #ddd; padding-top: 10px; }
         a { color: #0066cc; text-decoration: none; }
-        a:hover { text-decoration: underline; }
         .status-unstable { color: #e65100; font-weight: bold; }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h2>⚠️ Build Unstable — Review Required</h2>
-    </div>
+    <div class="header"><h2>⚠️ Build Unstable — Review Required</h2></div>
 
     <div class="section">
         <h3>Build Information</h3>
@@ -549,11 +557,7 @@ Please review and fix the failing tests. ⚠️"""
         <h3>❌ Failed Tests</h3>
         <table class="failures-table">
             <tr>
-                <th>#</th>
-                <th>Test Name</th>
-                <th>Class</th>
-                <th>Description</th>
-                <th>Impact</th>
+                <th>#</th><th>Test Name</th><th>Class</th><th>Description</th><th>Impact</th>
             </tr>
             ${emailFailedRows}
         </table>
