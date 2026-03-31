@@ -39,7 +39,14 @@ pipeline {
         stage('Report') {
             steps {
                 bat 'mvn allure:report -B || exit /b 0'
-                publishHTML([reportDir: 'target/allure-report', reportFiles: 'index.html', reportName: 'Allure Report'])
+                publishHTML([
+                    allowMissing: true,
+                    alwaysLinkToLastBuild: true,
+                    keepAll: true,
+                    reportDir: 'target/allure-report',
+                    reportFiles: 'index.html',
+                    reportName: 'Allure Report'
+                ])
             }
         }
     }
