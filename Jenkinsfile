@@ -73,7 +73,7 @@ pipeline {
                     slackSend(
                         color: '#36a64f',
                         channel: '#jenkins-notifications',
-                        botUser: true,
+                        botUser: false,
                         message: """✅ *BUILD PASSED*
 *Job:* ${env.JOB_NAME}
 *Build #:* ${env.BUILD_NUMBER}
@@ -98,7 +98,9 @@ Build completed successfully with all tests passing! 🎉"""
                 echo "[2/3] Sending Email notification..."
                 try {
                     def testSummary = currentBuild.result == 'SUCCESS' ? 'All tests passed ✅' : 'Tests executed'
+                    withCredentials([string(credentialsId: 'recipient-email', variable: 'RECIPIENT')]) {
                     mail(
+                        to: "${RECIPIENT}",
                         subject: "✅ BUILD PASSED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
                         mimeType: 'text/html',
                         body: """
@@ -166,6 +168,7 @@ Build completed successfully with all tests passing! 🎉"""
 </html>
 """
                     )
+                    } // end withCredentials
                     echo "✅ Email notification sent successfully"
                 } catch (Exception e) {
                     echo "⚠️  Email error: ${e.message} - Check SMTP configuration"
@@ -186,7 +189,7 @@ Build completed successfully with all tests passing! 🎉"""
                     slackSend(
                         color: '#d32f2f',
                         channel: '#jenkins-notifications',
-                        botUser: true,
+                        botUser: false,
                         message: """❌ *BUILD FAILED*
 *Job:* ${env.JOB_NAME}
 *Build #:* ${env.BUILD_NUMBER}
@@ -210,7 +213,9 @@ Please investigate and fix the build issues. Check the logs for more details. �
                 
                 echo "[2/3] Sending Email notification..."
                 try {
+                    withCredentials([string(credentialsId: 'recipient-email', variable: 'RECIPIENT')]) {
                     mail(
+                        to: "${RECIPIENT}",
                         subject: "❌ BUILD FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
                         mimeType: 'text/html',
                         body: """
@@ -295,6 +300,7 @@ Please investigate and fix the build issues. Check the logs for more details. �
 </html>
 """
                     )
+                    } // end withCredentials
                     echo "✅ Email notification sent successfully"
                 } catch (Exception e) {
                     echo "⚠️  Email error: ${e.message} - Check SMTP configuration"
@@ -315,7 +321,7 @@ Please investigate and fix the build issues. Check the logs for more details. �
                     slackSend(
                         color: '#ff9800',
                         channel: '#jenkins-notifications',
-                        botUser: true,
+                        botUser: false,
                         message: """⚠️  *BUILD UNSTABLE*
 *Job:* ${env.JOB_NAME}
 *Build #:* ${env.BUILD_NUMBER}
@@ -337,7 +343,9 @@ Please review test results and fix any failing tests. ⚠️"""
                 
                 echo "[2/2] Sending Email notification..."
                 try {
+                    withCredentials([string(credentialsId: 'recipient-email', variable: 'RECIPIENT')]) {
                     mail(
+                        to: "${RECIPIENT}",
                         subject: "⚠️  BUILD UNSTABLE: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
                         mimeType: 'text/html',
                         body: """
@@ -389,6 +397,7 @@ Please review test results and fix any failing tests. ⚠️"""
 </html>
 """
                     )
+                    } // end withCredentials
                     echo "✅ Email notification sent successfully"
                 } catch (Exception e) {
                     echo "⚠️  Email error: ${e.message}"
