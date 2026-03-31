@@ -67,8 +67,9 @@ pipeline {
                 echo "[1/2] Attempting to send Slack notification..."
                 try {
                     withCredentials([string(credentialsId: 'incoming-webhook', variable: 'SLACK_WEBHOOK')]) {
-                        def payload = """{"text": ":white_check_mark: *SUCCESS*: Job `${env.JOB_NAME}` [#${env.BUILD_NUMBER}]\\nStatus: PASSED | Duration: ${currentBuild.durationString}\\n<${env.BUILD_URL}|View Build> | <${env.BUILD_URL}allure|View Allure Report>"}"""
-                        bat """powershell -Command "Invoke-RestMethod -Uri '${SLACK_WEBHOOK}' -Method Post -ContentType 'application/json' -Body '${payload.replace("'", "\\u0027")}'" """
+                        def message = ":white_check_mark: *SUCCESS*: Job '${env.JOB_NAME}' [#${env.BUILD_NUMBER}]\nStatus: PASSED | Duration: ${currentBuild.durationString}\nBuild: ${env.BUILD_URL}\nReport: ${env.BUILD_URL}allure/"
+                        writeFile file: 'slack-payload.json', text: groovy.json.JsonOutput.toJson([text: message])
+                        bat """powershell -Command "Invoke-RestMethod -Uri \$env:SLACK_WEBHOOK -Method Post -ContentType 'application/json' -Body (Get-Content slack-payload.json -Raw)" """
                     }
                     echo "✅ Slack notification sent successfully"
                 } catch (Exception e) {
@@ -105,8 +106,9 @@ View Report: ${env.BUILD_URL}allure/
                 echo "[1/2] Attempting to send Slack notification..."
                 try {
                     withCredentials([string(credentialsId: 'incoming-webhook', variable: 'SLACK_WEBHOOK')]) {
-                        def payload = """{"text": ":x: *FAILED*: Job `${env.JOB_NAME}` [#${env.BUILD_NUMBER}]\\nStatus: FAILED | Duration: ${currentBuild.durationString}\\n<${env.BUILD_URL}|View Build> | <${env.BUILD_URL}allure|View Allure Report>"}"""
-                        bat """powershell -Command "Invoke-RestMethod -Uri '${SLACK_WEBHOOK}' -Method Post -ContentType 'application/json' -Body '${payload.replace("'", "\\u0027")}'" """
+                        def message = ":x: *FAILED*: Job '${env.JOB_NAME}' [#${env.BUILD_NUMBER}]\nStatus: FAILED | Duration: ${currentBuild.durationString}\nBuild: ${env.BUILD_URL}\nReport: ${env.BUILD_URL}allure/"
+                        writeFile file: 'slack-payload.json', text: groovy.json.JsonOutput.toJson([text: message])
+                        bat """powershell -Command "Invoke-RestMethod -Uri \$env:SLACK_WEBHOOK -Method Post -ContentType 'application/json' -Body (Get-Content slack-payload.json -Raw)" """
                     }
                     echo "✅ Slack notification sent successfully"
                 } catch (Exception e) {
@@ -145,8 +147,9 @@ Please check the console output for error details.
                 echo "[1/2] Attempting to send Slack notification..."
                 try {
                     withCredentials([string(credentialsId: 'incoming-webhook', variable: 'SLACK_WEBHOOK')]) {
-                        def payload = """{"text": ":warning: *UNSTABLE*: Job `${env.JOB_NAME}` [#${env.BUILD_NUMBER}]\\nStatus: UNSTABLE (test failures) | Duration: ${currentBuild.durationString}\\n<${env.BUILD_URL}|View Build> | <${env.BUILD_URL}allure|View Allure Report>"}"""
-                        bat """powershell -Command "Invoke-RestMethod -Uri '${SLACK_WEBHOOK}' -Method Post -ContentType 'application/json' -Body '${payload.replace("'", "\\u0027")}'" """
+                        def message = ":warning: *UNSTABLE*: Job '${env.JOB_NAME}' [#${env.BUILD_NUMBER}]\nStatus: UNSTABLE (test failures) | Duration: ${currentBuild.durationString}\nBuild: ${env.BUILD_URL}\nReport: ${env.BUILD_URL}allure/"
+                        writeFile file: 'slack-payload.json', text: groovy.json.JsonOutput.toJson([text: message])
+                        bat """powershell -Command "Invoke-RestMethod -Uri \$env:SLACK_WEBHOOK -Method Post -ContentType 'application/json' -Body (Get-Content slack-payload.json -Raw)" """
                     }
                     echo "✅ Slack notification sent successfully"
                 } catch (Exception e) {
