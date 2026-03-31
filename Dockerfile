@@ -6,7 +6,7 @@
 # Stage 1: Build and cache Maven dependencies
 FROM maven:3.9.6-eclipse-temurin-21 AS builder
 
-LABEL maintainer="Divine's API Testing Team"
+LABEL maintainer="API Testing Team"
 LABEL description="Containerized API test suite using REST Assured + JUnit 5 + Allure"
 
 # Set working directory

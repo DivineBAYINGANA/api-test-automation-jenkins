@@ -25,7 +25,7 @@ public class DeletePostTests extends TestBase {
                 .when()
                 .delete(ApiConfig.POSTS_ENDPOINT + "/" + PostDataFactory.VALID_POST_ID)
                 .then()
-                .statusCode(ApiConfig.STATUS_OK);
+                .spec(responseSpec);
     }
 
     @Test
@@ -40,7 +40,7 @@ public class DeletePostTests extends TestBase {
                 .when()
                 .delete(ApiConfig.POSTS_ENDPOINT + "/" + PostDataFactory.VALID_POST_ID)
                 .then()
-                .statusCode(ApiConfig.STATUS_OK)
+                .spec(responseSpec)
                 .body(JsonSchemaValidator.matchesJsonSchemaInClasspath("schemas/post-schema.json"));
     }
 }

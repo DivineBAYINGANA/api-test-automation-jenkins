@@ -31,7 +31,7 @@ public class UpdatePostTests extends TestBase {
                 .when()
                 .put(ApiConfig.POSTS_ENDPOINT + "/" + PostDataFactory.VALID_POST_ID)
                 .then()
-                .statusCode(ApiConfig.STATUS_OK)
+                .spec(responseSpec)
                 .body("id", equalTo(PostDataFactory.VALID_POST_ID))
                 .body("userId", equalTo(updatedPost.get("userId")))
                 .body("title", equalTo(updatedPost.get("title")))
@@ -51,7 +51,7 @@ public class UpdatePostTests extends TestBase {
                 .when()
                 .patch(ApiConfig.POSTS_ENDPOINT + "/" + PostDataFactory.VALID_POST_ID)
                 .then()
-                .statusCode(ApiConfig.STATUS_OK)
+                .spec(responseSpec)
                 .body("title", equalTo(patchData.get("title")))
                 .body("id", equalTo(PostDataFactory.VALID_POST_ID));
     }
@@ -69,7 +69,7 @@ public class UpdatePostTests extends TestBase {
                 .when()
                 .put(ApiConfig.POSTS_ENDPOINT + "/" + PostDataFactory.VALID_POST_ID)
                 .then()
-                .statusCode(ApiConfig.STATUS_OK)
+                .spec(responseSpec)
                 .body(JsonSchemaValidator.matchesJsonSchemaInClasspath("schemas/post-schema.json"));
     }
 
@@ -86,7 +86,7 @@ public class UpdatePostTests extends TestBase {
                 .when()
                 .patch(ApiConfig.POSTS_ENDPOINT + "/" + PostDataFactory.VALID_POST_ID)
                 .then()
-                .statusCode(ApiConfig.STATUS_OK)
+                .spec(responseSpec)
                 .body(JsonSchemaValidator.matchesJsonSchemaInClasspath("schemas/post-schema.json"));
     }
 }

@@ -33,8 +33,7 @@ public class GetPostTests extends TestBase {
                                 .when()
                                 .get(ApiConfig.POSTS_ENDPOINT)
                                 .then()
-                                .statusCode(ApiConfig.STATUS_OK)
-                                .contentType(containsString("application/json"))
+                                .spec(responseSpec)
                                 .body("$", instanceOf(java.util.List.class))
                                 .body("$.size()", greaterThan(0))
                                 .body("[0].id", notNullValue())
@@ -55,7 +54,7 @@ public class GetPostTests extends TestBase {
                                 .when()
                                 .get(ApiConfig.POSTS_ENDPOINT)
                                 .then()
-                                .statusCode(ApiConfig.STATUS_OK)
+                                .spec(responseSpec)
                                 .body("$.size()", equalTo(PostDataFactory.BUGGY_POST_COUNT));
         }
 
@@ -71,7 +70,7 @@ public class GetPostTests extends TestBase {
                                 .when()
                                 .get(ApiConfig.POSTS_ENDPOINT + "/" + postId)
                                 .then()
-                                .statusCode(ApiConfig.STATUS_OK)
+                                .spec(responseSpec)
                                 .body("id", equalTo(postId))
                                 .body("title", notNullValue())
                                 .body("body", notNullValue());
@@ -109,7 +108,7 @@ public class GetPostTests extends TestBase {
                                 .when()
                                 .get(ApiConfig.POSTS_ENDPOINT)
                                 .then()
-                                .statusCode(ApiConfig.STATUS_OK)
+                                .spec(responseSpec)
                                 .body("$.size()", equalTo(expectedCount))
                                 .body("userId", everyItem(equalTo(userId)));
         }
@@ -126,7 +125,7 @@ public class GetPostTests extends TestBase {
                                 .when()
                                 .get(ApiConfig.POSTS_ENDPOINT)
                                 .then()
-                                .statusCode(ApiConfig.STATUS_OK)
+                                .spec(responseSpec)
                                 .extract().response();
 
                 long responseTime = response.getTime();
@@ -146,7 +145,7 @@ public class GetPostTests extends TestBase {
                                 .when()
                                 .get(ApiConfig.POSTS_ENDPOINT + "/" + PostDataFactory.VALID_POST_ID)
                                 .then()
-                                .statusCode(ApiConfig.STATUS_OK)
+                                .spec(responseSpec)
                                 .body(JsonSchemaValidator.matchesJsonSchemaInClasspath("schemas/post-schema.json"));
         }
 
@@ -162,7 +161,7 @@ public class GetPostTests extends TestBase {
                                 .when()
                                 .get(ApiConfig.POSTS_ENDPOINT)
                                 .then()
-                                .statusCode(ApiConfig.STATUS_OK)
+                                .spec(responseSpec)
                                 .body(JsonSchemaValidator
                                                 .matchesJsonSchemaInClasspath("schemas/post-list-schema.json"));
         }

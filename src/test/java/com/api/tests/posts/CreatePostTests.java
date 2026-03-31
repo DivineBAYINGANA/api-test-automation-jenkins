@@ -35,7 +35,7 @@ public class CreatePostTests extends TestBase {
                 .when()
                 .post(ApiConfig.POSTS_ENDPOINT)
                 .then()
-                .statusCode(ApiConfig.STATUS_CREATED)
+                .spec(responseSpec)
                 .body("id", notNullValue())
                 .body("userId", equalTo(payload.get("userId")))
                 .body("title", equalTo(payload.get("title")))
@@ -55,7 +55,7 @@ public class CreatePostTests extends TestBase {
                 .when()
                 .post(ApiConfig.POSTS_ENDPOINT)
                 .then()
-                .statusCode(ApiConfig.STATUS_CREATED)
+                .spec(responseSpec)
                 .extract().response();
 
         Integer generatedId = response.jsonPath().get("id");
@@ -85,7 +85,7 @@ public class CreatePostTests extends TestBase {
                 .when()
                 .post(ApiConfig.POSTS_ENDPOINT)
                 .then()
-                .statusCode(ApiConfig.STATUS_CREATED)
+                .spec(responseSpec)
                 .body("userId", equalTo(expectedUserId))
                 .body("title", equalTo(expectedTitle))
                 .body("body", equalTo(expectedBody));
@@ -104,7 +104,7 @@ public class CreatePostTests extends TestBase {
                 .when()
                 .post(ApiConfig.POSTS_ENDPOINT)
                 .then()
-                .statusCode(ApiConfig.STATUS_CREATED)
+                .spec(responseSpec)
                 .body(JsonSchemaValidator.matchesJsonSchemaInClasspath("schemas/post-schema.json"));
     }
 }

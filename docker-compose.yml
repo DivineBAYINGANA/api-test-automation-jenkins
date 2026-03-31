@@ -23,7 +23,6 @@ services:
     command: mvn test -B --no-transfer-progress
 
   # ── Allure Report Server ───────────────────────────────────
-  # Access reports directly at http://localhost:5050
   allure-report:
     build:
       context: .
