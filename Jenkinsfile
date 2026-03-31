@@ -60,144 +60,118 @@ pipeline {
     }
 
     post {
-        always {
+        success {
             script {
-                // ── 1 & 2. Parse surefire XML + allure JSON via PowerShell ────
-                writeFile file: 'parse-results.ps1', text: '''
-$ErrorActionPreference = "SilentlyContinue"
-$total = 0; $failedCount = 0; $skippedCount = 0
-
-foreach ($f in (Get-ChildItem -Path "target/surefire-reports" -Filter "TEST-*.xml" -Recurse -ErrorAction SilentlyContinue)) {
-    try {
-        [xml]$xml  = Get-Content $f.FullName -Encoding UTF8
-        $s          = $xml.testsuite
-        $total       += [int]$s.tests
-        $failedCount += [int]$s.failures + [int]$s.errors
-        $skippedCount += [int]$s.skipped
-    } catch {}
-}
-$passedCount = $total - $failedCount - $skippedCount
-$passPct = if ($total -gt 0) { [math]::Floor($passedCount * 100 / $total) } else { 0 }
-
-$failTests = [System.Collections.Generic.List[object]]::new()
-foreach ($f in (Get-ChildItem -Path "target/allure-results" -Filter "*-result.json" -Recurse -ErrorAction SilentlyContinue)) {
-    try {
-        $d = Get-Content $f.FullName -Encoding UTF8 -Raw | ConvertFrom-Json
-        if ($d.status -eq "failed" -or $d.status -eq "broken") {
-            $lm = @{}
-            if ($d.labels) { $d.labels | ForEach-Object { $lm[$_.name] = $_.value } }
-            $msg   = if ($d.statusDetails -and $d.statusDetails.message) { $d.statusDetails.message } else { "N/A" }
-            $short = if ($msg.Length -gt 250) { $msg.Substring(0, 250) + "..." } else { $msg }
-            $exp = "N/A"; $act = "N/A"
-            if ($msg -match "Expected:\\s*<(.*?)>")           { $exp = $Matches[1] }
-            if ($msg -match "(?:Actual|but was):\\s*<(.*?)>") { $act = $Matches[1] }
-            $failTests.Add([pscustomobject]@{
-                id          = if ($lm["allureId"])  { $lm["allureId"] }           else { "N/A" }
-                name        = if ($d.name)          { $d.name }                   else { "Unknown" }
-                description = if ($d.description)  { $d.description }             else { "" }
-                severity    = if ($lm["severity"])  { $lm["severity"].ToUpper() } else { "NORMAL" }
-                message     = $short
-                expected    = $exp
-                actual      = $act
-            })
-        }
-    } catch {}
-}
-
-[pscustomobject]@{
-    total        = $total
-    passed       = $passedCount
-    failed       = $failedCount
-    skipped      = $skippedCount
-    passPct      = $passPct
-    failingTests = @($failTests)
-} | ConvertTo-Json -Depth 5 | Out-File "test-results.json" -Encoding UTF8
-'''
-                bat 'powershell -ExecutionPolicy Bypass -File parse-results.ps1'
-
-                def parsed       = new groovy.json.JsonSlurper().parseText(readFile('test-results.json'))
-                def total        = (parsed.total   as int) ?: 0
-                def passedCount  = (parsed.passed  as int) ?: 0
-                def failedCount  = (parsed.failed  as int) ?: 0
-                def skippedCount = (parsed.skipped as int) ?: 0
-                def passPct      = (parsed.passPct as int) ?: 0
-                def failingTests = parsed.failingTests instanceof List ? parsed.failingTests : []
-
-                def esc = { s ->
-                    s?.toString()
-                     ?.replace('&', '&amp;')?.replace('<', '&lt;')
-                     ?.replace('>', '&gt;')?.replace('"', '&quot;') ?: ''
-                }
-
-                // ── 3. Build status context ────────────────────────────────────
-                def buildResult = currentBuild.currentResult ?: 'UNKNOWN'
-                def isSuccess   = buildResult == 'SUCCESS'
-                def isFailure   = buildResult == 'FAILURE'
-                def slackEmoji  = isSuccess ? ':white_check_mark:' : (isFailure ? ':x:' : ':warning:')
-                def emailIcon   = isSuccess ? '✅' : (isFailure ? '❌' : '⚠️')
-                def slackColor  = isSuccess ? '#2e7d32' : (isFailure ? '#e01e5a' : '#ff8800')
-                def statusColor = isSuccess ? '#2e7d32' : (isFailure ? '#b71c1c' : '#e65100')
-                def statusBg    = isSuccess ? '#e8f5e9' : (isFailure ? '#ffebee' : '#fff3e0')
-
-                // ── 4. Slack notification (rich blocks) ────────────────────────
-                echo "Sending Slack notification..."
+                echo "========== SENDING SUCCESS NOTIFICATIONS =========="
+                echo "[1/3] Sending Slack notification..."
                 try {
-                    withCredentials([string(credentialsId: 'incoming-webhook', variable: 'SLACK_WEBHOOK')]) {
-                        def blocks = [
-                            [
-                                type: 'header',
-                                text: [type: 'plain_text', text: "${slackEmoji} API Tests — ${buildResult}", emoji: true]
-                            ],
-                            [
-                                type  : 'section',
-                                fields: [
-                                    [type: 'mrkdwn', text: "*Total:*\n${total}"],
-                                    [type: 'mrkdwn', text: "*Passed:*\n${passedCount}"],
-                                    [type: 'mrkdwn', text: "*Failed:*\n${failedCount}"],
-                                    [type: 'mrkdwn', text: "*Skipped:*\n${skippedCount}"],
-                                    [type: 'mrkdwn', text: "*Pass Rate:*\n${passPct}%"],
-                                    [type: 'mrkdwn', text: "*Duration:*\n${currentBuild.durationString}"]
-                                ]
-                            ],
-                            [
-                                type  : 'section',
-                                fields: [
-                                    [type: 'mrkdwn', text: "*Job:*\n${env.JOB_NAME}"],
-                                    [type: 'mrkdwn', text: "*Build:*\n#${env.BUILD_NUMBER}"]
-                                ]
-                            ],
-                            [type: 'divider']
-                        ]
+                    slackSend(
+                        color: 'good',
+                        message: """✅ SUCCESS: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' passed
+*Build Details:*
+• Status: PASSED
+• Duration: ${currentBuild.durationString}
+• <${env.BUILD_URL}|View Full Build>
+• <${env.BUILD_URL}allure|View Allure Report>"""
+                    )
+                    echo "✅ Slack notification sent"
+                } catch (Exception e) {
+                    echo "⚠️  Slack error: ${e.message}"
+                }
+                
+                echo "[2/3] Sending Email notification..."
+                try {
+                    mail(
+                        subject: "✅ SUCCESS: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                        body: """Build PASSED
 
-                        if (failingTests) {
-                            blocks << [type: 'section', text: [type: 'mrkdwn', text: '*:rotating_light: Failing Tests*']]
-                            failingTests.take(10).each { t ->
-                                blocks << [
-                                    type: 'section',
-                                    text: [
-                                        type: 'mrkdwn',
-                                        text: "*[${t.id}] ${t.name}*\n" +
-                                              "*Severity:* `${t.severity}`\n" +
-                                              "*Expected:* `${t.expected}`   *Actual:* `${t.actual}`\n" +
-                                              "${t.message}"
-                                    ]
-                                ]
-                                blocks << [type: 'divider']
-                            }
-                        }
+Job: ${env.JOB_NAME}
+Build: #${env.BUILD_NUMBER}
+Duration: ${currentBuild.durationString}
 
-                        blocks << [
-                            type    : 'actions',
-                            elements: [
-                                [type: 'button', text: [type: 'plain_text', text: 'View Build',    emoji: true], url: "${env.BUILD_URL}",         style: 'primary'],
-                                [type: 'button', text: [type: 'plain_text', text: 'Allure Report', emoji: true], url: "${env.BUILD_URL}allure/"]
-                            ]
-                        ]
+View Build: ${env.BUILD_URL}
+View Report: ${env.BUILD_URL}allure/
+"""
+                    )
+                    echo "✅ Email notification sent"
+                } catch (Exception e) {
+                    echo "⚠️  Email error: ${e.message}"
+                }
+                
+                echo "[3/3] Archiving artifacts..."
+                archiveArtifacts artifacts: 'target/site/allure-maven-plugin/**,target/surefire-reports/**', allowEmptyArchive: true
+                junit allowEmptyResults: true, testResults: 'target/surefire-reports/*.xml'
+                echo "✅ Artifacts archived"
+                echo "========== SUCCESS NOTIFICATIONS COMPLETE =========="
+            }
+        }
+        failure {
+            script {
+                echo "========== SENDING FAILURE NOTIFICATIONS =========="
+                echo "[1/3] Sending Slack notification..."
+                try {
+                    slackSend(
+                        color: 'danger',
+                        message: """❌ FAILED: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' failed
+*Build Details:*
+• Status: FAILED
+• Duration: ${currentBuild.durationString}
+• <${env.BUILD_URL}|View Full Build>
+• <${env.BUILD_URL}allure|View Allure Report>"""
+                    )
+                    echo "✅ Slack notification sent"
+                } catch (Exception e) {
+                    echo "⚠️  Slack error: ${e.message}"
+                }
+                
+                echo "[2/3] Sending Email notification..."
+                try {
+                    mail(
+                        subject: "❌ FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                        body: """Build FAILED
 
-                        def payload = groovy.json.JsonOutput.toJson([attachments: [[color: slackColor, blocks: blocks]]])
-                        writeFile file: 'slack-payload.json', text: payload
-                        bat 'powershell -Command "Invoke-RestMethod -Uri $env:SLACK_WEBHOOK -Method Post -ContentType \'application/json\' -Body (Get-Content slack-payload.json -Raw)"'
-                    }
+Job: ${env.JOB_NAME}
+Build: #${env.BUILD_NUMBER}
+Duration: ${currentBuild.durationString}
+
+View Build: ${env.BUILD_URL}
+View Report: ${env.BUILD_URL}allure/
+
+Please check the console output for error details.
+"""
+                    )
+                    echo "✅ Email notification sent"
+                } catch (Exception e) {
+                    echo "⚠️  Email error: ${e.message}"
+                }
+                
+                echo "[3/3] Archiving artifacts..."
+                archiveArtifacts artifacts: 'target/site/allure-maven-plugin/**,target/surefire-reports/**', allowEmptyArchive: true
+                junit allowEmptyResults: true, testResults: 'target/surefire-reports/*.xml'
+                echo "✅ Artifacts archived"
+                echo "========== FAILURE NOTIFICATIONS COMPLETE =========="
+            }
+        }
+        unstable {
+            script {
+                echo "Build is unstable - sending notifications..."
+                try {
+                    slackSend(
+                        color: 'warning',
+                        message: """⚠️  UNSTABLE: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' is unstable
+<${env.BUILD_URL}|View Build>"""
+                    )
+                } catch (Exception e) {
+                    echo "Slack error: ${e.message}"
+                }
+            }
+        }
+        always {
+            echo "========== PIPELINE CLEANUP =========="
+            cleanWs(deleteDirs: true, patterns: [[pattern: 'parse-results.ps1, slack-payload.json', type: 'INCLUDE']])
+            echo "========== PIPELINE COMPLETE =========="
+        }
+    }
                     echo "✅ Slack notification sent"
                 } catch (Exception ex) {
                     echo "❌ Slack notification failed: ${ex.message}"
