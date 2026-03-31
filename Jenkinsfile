@@ -27,11 +27,14 @@ pipeline {
 
         stage('Test') {
             steps {
-                bat 'mvn test -B'
+                catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                    bat 'mvn test -B'
+                }
             }
             post {
                 always {
-                    junit '**/target/surefire-reports/*.xml'
+                    junit testResults: '**/target/surefire-reports/*.xml',
+                          allowEmptyResults: true
                 }
             }
         }
@@ -39,12 +42,14 @@ pipeline {
         stage('Report') {
             steps {
                 script {
-                    bat 'mvn allure:report -B'
+                    catchError(buildResult: currentBuild.result ?: 'SUCCESS', stageResult: 'UNSTABLE') {
+                        bat 'mvn allure:report -B'
+                    }
 
                     if (fileExists('target/site/allure-maven-plugin/index.html')) {
                         echo "Allure report found and publishing..."
                         publishHTML([
-                            allowMissing: false,
+                            allowMissing: true,
                             alwaysLinkToLastBuild: true,
                             keepAll: true,
                             reportDir: 'target/site/allure-maven-plugin',
@@ -339,7 +344,7 @@ Please review test results and fix any failing tests. ⚠️"""
 <html>
 <head>
     <style>
-                        body { font-family: Arial, sans-serif; color: #333; }
+        body { font-family: Arial, sans-serif; color: #333; }
         .header { background-color: #ff9800; color: white; padding: 20px; border-radius: 5px; margin-bottom: 20px; }
         .section { margin: 20px 0; padding: 15px; background-color: #f5f5f5; border-left: 4px solid #ff9800; }
         .section h3 { margin-top: 0; color: #ff9800; }
