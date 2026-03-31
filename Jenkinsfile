@@ -89,8 +89,8 @@ foreach ($f in (Get-ChildItem -Path "target/allure-results" -Filter "*-result.js
             $msg   = if ($d.statusDetails -and $d.statusDetails.message) { $d.statusDetails.message } else { "N/A" }
             $short = if ($msg.Length -gt 250) { $msg.Substring(0, 250) + "..." } else { $msg }
             $exp = "N/A"; $act = "N/A"
-            if ($msg -match "Expected:\s*<(.*?)>")           { $exp = $Matches[1] }
-            if ($msg -match "(?:Actual|but was):\s*<(.*?)>") { $act = $Matches[1] }
+            if ($msg -match "Expected:\\s*<(.*?)>")           { $exp = $Matches[1] }
+            if ($msg -match "(?:Actual|but was):\\s*<(.*?)>") { $act = $Matches[1] }
             $failTests.Add([pscustomobject]@{
                 id          = if ($lm["allureId"])  { $lm["allureId"] }           else { "N/A" }
                 name        = if ($d.name)          { $d.name }                   else { "Unknown" }
