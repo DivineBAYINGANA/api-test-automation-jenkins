@@ -39,34 +39,22 @@ pipeline {
         stage('Report') {
             steps {
                 script {
-                    // Try to generate Allure report if plugin is configured
-                    bat '''
-                        mvn allure:report -B 2>nul || echo "Allure report generation skipped"
-                    '''
+                    // Generate Allure report
+                    bat 'mvn allure:report -B'
                     
-                    // Check if allure-report exists, if not check for allure-results
-                    if (fileExists('target/allure-report/index.html')) {
-                        echo "Allure report found, publishing..."
+                    // Publish Allure report (generated in target/site/allure-maven-plugin)
+                    if (fileExists('target/site/allure-maven-plugin/index.html')) {
+                        echo "Allure report found and publishing..."
                         publishHTML([
                             allowMissing: false,
                             alwaysLinkToLastBuild: true,
                             keepAll: true,
-                            reportDir: 'target/allure-report',
+                            reportDir: 'target/site/allure-maven-plugin',
                             reportFiles: 'index.html',
                             reportName: 'Allure Report'
                         ])
-                    } else if (fileExists('target/allure-results')) {
-                        echo "Allure results found but HTML report not generated. Publishing results..."
-                        publishHTML([
-                            allowMissing: true,
-                            alwaysLinkToLastBuild: true,
-                            keepAll: true,
-                            reportDir: 'target/allure-results',
-                            reportFiles: 'index.html',
-                            reportName: 'Allure Results'
-                        ])
                     } else {
-                        echo "No Allure reports found. JUnit reports will be available."
+                        echo "Warning: Allure report not found at expected location."
                     }
                 }
             }
@@ -85,8 +73,8 @@ pipeline {
 • <${env.BUILD_URL}allure|View Allure Report>"""
             )
             script {
-                if (fileExists('target/allure-report/index.html')) {
-                    slackUploadFile(filePath: 'target/allure-report/index.html', initialComment: 'Allure Test Report')
+                if (fileExists('target/site/allure-maven-plugin/index.html')) {
+                    slackUploadFile(filePath: 'target/site/allure-maven-plugin/index.html', initialComment: 'Allure Test Report')
                 }
             }
         }
@@ -101,13 +89,13 @@ pipeline {
 • <${env.BUILD_URL}allure|View Allure Report>"""
             )
             script {
-                if (fileExists('target/allure-report/index.html')) {
-                    slackUploadFile(filePath: 'target/allure-report/index.html', initialComment: 'Allure Test Report - Review for failures')
+                if (fileExists('target/site/allure-maven-plugin/index.html')) {
+                    slackUploadFile(filePath: 'target/site/allure-maven-plugin/index.html', initialComment: 'Allure Test Report - Review for failures')
                 }
             }
         }
         always {
-            archiveArtifacts artifacts: 'target/allure-report/**,target/surefire-reports/**', allowEmptyArchive: true
+            archiveArtifacts artifacts: 'target/site/allure-maven-plugin/**,target/surefire-reports/**', allowEmptyArchive: true
             junit allowEmptyResults: true, testResults: 'target/surefire-reports/*.xml'
         }
     }
