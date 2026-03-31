@@ -1,61 +1,38 @@
 #!/usr/bin/env groovy
 
-// ── Parses one surefire XML string — runs outside CPS so XmlParser works safely
-@NonCPS
-def parseSurefireXml(String content) {
-    def result = [total: 0, failed: 0, skipped: 0, cases: []]
-    try {
-        def suite = new XmlParser().parseText(content)
-        result.total   = (suite.attribute('tests')    ?: '0').toInteger()
-        result.failed  = (suite.attribute('failures') ?: '0').toInteger() +
-                         (suite.attribute('errors')   ?: '0').toInteger()
-        result.skipped = (suite.attribute('skipped')  ?: '0').toInteger()
-        for (def tc : suite.children()) {
-            if (tc.name() != 'testcase') continue
-            for (def child : tc.children()) {
-                if (child.name() == 'failure' || child.name() == 'error') {
-                    def rawClass   = tc.attribute('classname') ?: 'Unknown'
-                    def simpleName = rawClass.contains('.')
-                        ? rawClass.substring(rawClass.lastIndexOf('.') + 1)
-                        : rawClass
-                    def impact = simpleName
-                        .replaceAll('Test$', '')
-                        .replaceAll(/(?<=[a-z])(?=[A-Z])/, ' ')
-                        .trim()
-                    def msg = (child.attribute('message') ?: child.text() ?: 'No details')
-                        .split('\n')[0].trim()
-                    result.cases << [
-                        name     : tc.attribute('name') ?: 'Unknown',
-                        className: simpleName,
-                        message  : msg,
-                        impact   : (impact ?: simpleName)
-                    ]
-                    break
-                }
-            }
-        }
-    } catch (Exception ignored) {}
-    return result
-}
-
-// ── Reads surefire files via pipeline steps, delegates XML work to @NonCPS above
+// ── Reads test-summary.txt written by the 'Parse Test Results' stage
 def getTestSummary() {
     def summary = [total: 0, passed: 0, failed: 0, skipped: 0, failedTests: []]
     try {
-        def files = findFiles(glob: 'target/surefire-reports/TEST-*.xml')
-        for (def file : files) {
-            def content = readFile(file.path)
-            def parsed  = parseSurefireXml(content)
-            summary.total   += parsed.total
-            summary.failed  += parsed.failed
-            summary.skipped += parsed.skipped
-            for (def c : parsed.cases) {
-                summary.failedTests << c
+        if (!fileExists('test-summary.txt')) return summary
+        def lines = readFile('test-summary.txt').split('\n')
+        for (def line : lines) {
+            line = line.trim()
+            if      (line.startsWith('TOTAL:'))   { summary.total   = line.substring(6).trim().toInteger() }
+            else if (line.startsWith('PASSED:'))  { summary.passed  = line.substring(7).trim().toInteger() }
+            else if (line.startsWith('FAILED:'))  { summary.failed  = line.substring(7).trim().toInteger() }
+            else if (line.startsWith('SKIPPED:')) { summary.skipped = line.substring(8).trim().toInteger() }
+            else if (line.startsWith('TEST:')) {
+                def parts = line.substring(5).split('\\|\\|')
+                if (parts.length >= 3) {
+                    def rawClass   = parts[0].trim()
+                    def simpleName = rawClass.contains('.')
+                        ? rawClass.substring(rawClass.lastIndexOf('.') + 1)
+                        : rawClass
+                    def impact = simpleName.endsWith('Test')
+                        ? simpleName.substring(0, simpleName.length() - 4)
+                        : simpleName
+                    summary.failedTests << [
+                        name     : parts[1].trim(),
+                        className: simpleName,
+                        message  : parts[2].trim(),
+                        impact   : (impact ?: simpleName)
+                    ]
+                }
             }
         }
-        summary.passed = summary.total - summary.failed - summary.skipped
     } catch (Exception e) {
-        echo "⚠️  Could not parse surefire reports: ${e.message}"
+        echo "⚠️  Could not parse test summary: ${e.message}"
     }
     return summary
 }
@@ -95,6 +72,39 @@ pipeline {
                 always {
                     junit testResults: '**/target/surefire-reports/*.xml',
                           allowEmptyResults: true
+                }
+            }
+        }
+
+        stage('Parse Test Results') {
+            steps {
+                catchError(buildResult: currentBuild.result ?: 'SUCCESS', stageResult: 'UNSTABLE') {
+                    bat '''
+                        powershell -NoProfile -Command ^
+                        "$total=0; $passed=0; $failed=0; $skipped=0; $lines=@(); ^
+                        $files = Get-ChildItem 'target\\surefire-reports\\TEST-*.xml' -ErrorAction SilentlyContinue; ^
+                        foreach ($f in $files) { ^
+                            [xml]$xml = Get-Content $f.FullName -Encoding UTF8; ^
+                            $s = $xml.testsuite; ^
+                            $total  += [int]$s.tests; ^
+                            $failed += [int]$s.failures + [int]$s.errors; ^
+                            $skipped += [int]$s.skipped; ^
+                            foreach ($tc in @($s.testcase)) { ^
+                                $fn = $null; ^
+                                if ($tc.failure) { $fn = $tc.failure } ^
+                                elseif ($tc.error) { $fn = $tc.error }; ^
+                                if ($fn) { ^
+                                    $msg = ''; ^
+                                    if ($fn -is [System.Xml.XmlElement]) { $msg = if ($fn.message) { $fn.message } else { $fn.InnerText } }; ^
+                                    $msg = (($msg -split '`n')[0]).Trim() -replace '\\|\\|', '-'; ^
+                                    $lines += 'TEST:' + $tc.classname + '||' + $tc.name + '||' + $msg ^
+                                } ^
+                            } ^
+                        }; ^
+                        $passed = $total - $failed - $skipped; ^
+                        $out = @('TOTAL:' + $total, 'PASSED:' + $passed, 'FAILED:' + $failed, 'SKIPPED:' + $skipped) + $lines; ^
+                        $out | Out-File -FilePath 'test-summary.txt' -Encoding UTF8"
+                    '''
                 }
             }
         }
@@ -592,7 +602,7 @@ Please review and fix the failing tests. ⚠️"""
 
         cleanup {
             echo "========== PIPELINE CLEANUP =========="
-            cleanWs(deleteDirs: true, patterns: [[pattern: 'parse-results.ps1, slack-payload.json', type: 'INCLUDE']])
+            cleanWs(deleteDirs: true, patterns: [[pattern: 'parse-results.ps1, slack-payload.json, test-summary.txt', type: 'INCLUDE']])
             echo "========== PIPELINE COMPLETE =========="
         }
     }
