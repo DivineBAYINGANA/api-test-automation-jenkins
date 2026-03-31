@@ -1,5 +1,39 @@
 #!/usr/bin/env groovy
 
+@NonCPS
+def getTestSummary(def build) {
+    def summary = [total: 0, passed: 0, failed: 0, skipped: 0, failedTests: []]
+    try {
+        def action = build.testResultAction
+        if (action != null) {
+            summary.total   = action.totalCount
+            summary.failed  = action.failCount
+            summary.skipped = action.skipCount
+            summary.passed  = summary.total - summary.failed - summary.skipped
+            for (def test : action.failedTests) {
+                def raw = test.className ?: 'Unknown'
+                def simpleName = raw.contains('.')
+                    ? raw.substring(raw.lastIndexOf('.') + 1)
+                    : raw
+                def impact = simpleName
+                    .replaceAll('Test$', '')
+                    .replaceAll(/(?<=[a-z])(?=[A-Z])/, ' ')
+                    .trim()
+                def message = (test.errorDetails ?: 'No error details')
+                    .split('\n')[0]
+                    .trim()
+                summary.failedTests << [
+                    name     : test.name      ?: 'Unknown Test',
+                    className: simpleName,
+                    message  : message,
+                    impact   : impact ?: simpleName
+                ]
+            }
+        }
+    } catch (Exception ignored) {}
+    return summary
+}
+
 pipeline {
     agent any
 
@@ -68,6 +102,9 @@ pipeline {
         success {
             script {
                 echo "========== SENDING SUCCESS NOTIFICATIONS =========="
+                def ts = getTestSummary(currentBuild)
+
+                // ── Slack ──────────────────────────────────────────────
                 echo "[1/3] Sending Slack notification..."
                 try {
                     slackSend(
@@ -83,28 +120,34 @@ pipeline {
 *Branch:* ${env.GIT_BRANCH ?: 'N/A'}
 *Commit:* ${env.GIT_COMMIT?.take(7) ?: 'N/A'}
 
+*📊 Test Results:*
+• Tests Run: ${ts.total}
+• ✅ Passed: ${ts.passed}
+• ❌ Failed: ${ts.failed}
+• ⏭️ Skipped: ${ts.skipped}
+
 *Reports & Details:*
 • <${env.BUILD_URL}|View Full Build>
 • <${env.BUILD_URL}testReport|View Test Results>
 • <${env.BUILD_URL}Allure_20Report|View Allure Report>
 • <${env.BUILD_URL}execution/node/2/ws|View Workspace>
 
-Build completed successfully with all tests passing! 🎉"""
+All tests passed — great work! 🎉"""
                     )
                     echo "✅ Slack notification sent successfully"
                 } catch (Exception e) {
                     echo "⚠️  Slack error: ${e.message} - Check webhook configuration"
                 }
-                
+
+                // ── Email ──────────────────────────────────────────────
                 echo "[2/3] Sending Email notification..."
                 try {
-                    def testSummary = currentBuild.result == 'SUCCESS' ? 'All tests passed ✅' : 'Tests executed'
                     withCredentials([string(credentialsId: 'recipient-email', variable: 'RECIPIENT')]) {
-                    mail(
-                        to: RECIPIENT,
-                        subject: "✅ BUILD PASSED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                        mimeType: 'text/html',
-                        body: """
+                        mail(
+                            to: RECIPIENT,
+                            subject: "✅ BUILD PASSED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                            mimeType: 'text/html',
+                            body: """
 <html>
 <head>
     <style>
@@ -115,6 +158,12 @@ Build completed successfully with all tests passing! 🎉"""
         .detail { margin: 8px 0; }
         .label { font-weight: bold; color: #333; }
         .value { color: #666; }
+        .stats-table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+        .stats-table td { padding: 10px 14px; border: 1px solid #ddd; text-align: center; font-size: 15px; }
+        .stat-total  { background: #e8f4fd; font-weight: bold; }
+        .stat-pass   { background: #d4edda; color: #155724; font-weight: bold; }
+        .stat-fail   { background: #f8d7da; color: #721c24; font-weight: bold; }
+        .stat-skip   { background: #fff3cd; color: #856404; font-weight: bold; }
         .footer { margin-top: 30px; font-size: 12px; color: #999; border-top: 1px solid #ddd; padding-top: 10px; }
         a { color: #0066cc; text-decoration: none; }
         a:hover { text-decoration: underline; }
@@ -125,7 +174,7 @@ Build completed successfully with all tests passing! 🎉"""
     <div class="header">
         <h2>✅ Build Passed Successfully</h2>
     </div>
-    
+
     <div class="section">
         <h3>Build Information</h3>
         <div class="detail"><span class="label">Job Name:</span> <span class="value">${env.JOB_NAME}</span></div>
@@ -134,14 +183,19 @@ Build completed successfully with all tests passing! 🎉"""
         <div class="detail"><span class="label">Duration:</span> <span class="value">${currentBuild.durationString}</span></div>
         <div class="detail"><span class="label">Timestamp:</span> <span class="value">${new Date().format('yyyy-MM-dd HH:mm:ss')}</span></div>
     </div>
-    
+
     <div class="section">
-        <h3>Test Summary</h3>
-        <div class="detail"><span class="label">Test Results:</span> <span class="value">${testSummary}</span></div>
-        <div class="detail"><span class="label">Report Generated:</span> <span class="value">✅ Yes</span></div>
-        <div class="detail"><span class="label">Artifacts Archived:</span> <span class="value">✅ Yes</span></div>
+        <h3>📊 Test Results</h3>
+        <table class="stats-table">
+            <tr>
+                <td class="stat-total">🔢 Tests Run<br/><strong>${ts.total}</strong></td>
+                <td class="stat-pass">✅ Passed<br/><strong>${ts.passed}</strong></td>
+                <td class="stat-fail">❌ Failed<br/><strong>${ts.failed}</strong></td>
+                <td class="stat-skip">⏭️ Skipped<br/><strong>${ts.skipped}</strong></td>
+            </tr>
+        </table>
     </div>
-    
+
     <div class="section">
         <h3>Quick Links</h3>
         <ul>
@@ -151,16 +205,7 @@ Build completed successfully with all tests passing! 🎉"""
             <li><a href="${env.BUILD_URL}execution/node/2/ws">Build Workspace</a></li>
         </ul>
     </div>
-    
-    <div class="section">
-        <h3>Next Steps</h3>
-        <ul>
-            <li>Review the Allure Report for detailed test metrics</li>
-            <li>Check test results for any potential improvements</li>
-            <li>Deploy to next stage if applicable</li>
-        </ul>
-    </div>
-    
+
     <div class="footer">
         <p>This automated notification was generated by Jenkins Pipeline for <strong>${env.JOB_NAME}</strong></p>
         <p>Generated at: ${new Date().format('yyyy-MM-dd HH:mm:ss')} | Build Server: ${env.JENKINS_URL}</p>
@@ -168,13 +213,14 @@ Build completed successfully with all tests passing! 🎉"""
 </body>
 </html>
 """
-                    )
-                    } // end withCredentials
+                        )
+                    }
                     echo "✅ Email notification sent successfully"
                 } catch (Exception e) {
                     echo "⚠️  Email error: ${e.message} - Check SMTP configuration"
                 }
-                
+
+                // ── Artifacts ──────────────────────────────────────────
                 echo "[3/3] Archiving artifacts..."
                 archiveArtifacts artifacts: 'target/site/allure-maven-plugin/**,target/surefire-reports/**', allowEmptyArchive: true
                 junit allowEmptyResults: true, testResults: 'target/surefire-reports/*.xml'
@@ -182,9 +228,41 @@ Build completed successfully with all tests passing! 🎉"""
                 echo "========== SUCCESS NOTIFICATIONS COMPLETE =========="
             }
         }
+
         failure {
             script {
                 echo "========== SENDING FAILURE NOTIFICATIONS =========="
+                def ts = getTestSummary(currentBuild)
+
+                // ── Build failed test list for Slack ───────────────────
+                def slackFailedList = ''
+                if (ts.failedTests.size() > 0) {
+                    ts.failedTests.eachWithIndex { t, i ->
+                        slackFailedList += "\n${i + 1}. ❌ *${t.name}* — ${t.className}\n   📝 *Description:* ${t.message}\n   ⚠️ *Impact:* ${t.impact}\n"
+                    }
+                } else {
+                    slackFailedList = '\nNo individual test data available — check console output.\n'
+                }
+
+                // ── Build failed test rows for Email ───────────────────
+                def emailFailedRows = ''
+                if (ts.failedTests.size() > 0) {
+                    ts.failedTests.eachWithIndex { t, i ->
+                        def rowColor = i % 2 == 0 ? '#fff5f5' : '#ffffff'
+                        emailFailedRows += """
+                        <tr style="background:${rowColor}">
+                            <td style="padding:10px;border:1px solid #ddd;color:#721c24;font-weight:bold;">${i + 1}</td>
+                            <td style="padding:10px;border:1px solid #ddd;font-weight:bold;">${t.name}</td>
+                            <td style="padding:10px;border:1px solid #ddd;color:#555;">${t.className}</td>
+                            <td style="padding:10px;border:1px solid #ddd;">${t.message}</td>
+                            <td style="padding:10px;border:1px solid #ddd;color:#c0392b;font-weight:bold;">${t.impact}</td>
+                        </tr>"""
+                    }
+                } else {
+                    emailFailedRows = '<tr><td colspan="5" style="padding:10px;border:1px solid #ddd;text-align:center;">No individual test data available — check console output.</td></tr>'
+                }
+
+                // ── Slack ──────────────────────────────────────────────
                 echo "[1/3] Sending Slack notification..."
                 try {
                     slackSend(
@@ -200,27 +278,35 @@ Build completed successfully with all tests passing! 🎉"""
 *Branch:* ${env.GIT_BRANCH ?: 'N/A'}
 *Commit:* ${env.GIT_COMMIT?.take(7) ?: 'N/A'}
 
+*📊 Test Results:*
+• Tests Run: ${ts.total}
+• ✅ Passed: ${ts.passed}
+• ❌ Failed: ${ts.failed}
+• ⏭️ Skipped: ${ts.skipped}
+
+*❌ Failed Tests:*${slackFailedList}
 *⚠️ Action Required:*
 • <${env.BUILD_URL}|View Full Build Log>
 • <${env.BUILD_URL}testReport|View Test Failures>
 • <${env.BUILD_URL}Allure_20Report|View Allure Report>
 • <${env.BUILD_URL}console|View Console Output>
 
-Please investigate and fix the build issues. Check the logs for more details. ⛔"""
+Please investigate and fix the build issues. ⛔"""
                     )
                     echo "✅ Slack notification sent successfully"
                 } catch (Exception e) {
                     echo "⚠️  Slack error: ${e.message} - Check webhook configuration"
                 }
-                
+
+                // ── Email ──────────────────────────────────────────────
                 echo "[2/3] Sending Email notification..."
                 try {
                     withCredentials([string(credentialsId: 'recipient-email', variable: 'RECIPIENT')]) {
-                    mail(
-                        to: RECIPIENT,
-                        subject: "❌ BUILD FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                        mimeType: 'text/html',
-                        body: """
+                        mail(
+                            to: RECIPIENT,
+                            subject: "❌ BUILD FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                            mimeType: 'text/html',
+                            body: """
 <html>
 <head>
     <style>
@@ -231,22 +317,30 @@ Please investigate and fix the build issues. Check the logs for more details. �
         .detail { margin: 8px 0; }
         .label { font-weight: bold; color: #333; }
         .value { color: #666; }
+        .stats-table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+        .stats-table td { padding: 10px 14px; border: 1px solid #ddd; text-align: center; font-size: 15px; }
+        .stat-total  { background: #e8f4fd; font-weight: bold; }
+        .stat-pass   { background: #d4edda; color: #155724; font-weight: bold; }
+        .stat-fail   { background: #f8d7da; color: #721c24; font-weight: bold; }
+        .stat-skip   { background: #fff3cd; color: #856404; font-weight: bold; }
+        .failures-table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13px; }
+        .failures-table th { background: #d32f2f; color: white; padding: 10px; text-align: left; border: 1px solid #c0392b; }
+        .warning-box { background-color: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 4px; margin: 15px 0; }
         .footer { margin-top: 30px; font-size: 12px; color: #999; border-top: 1px solid #ddd; padding-top: 10px; }
         a { color: #0066cc; text-decoration: none; }
         a:hover { text-decoration: underline; }
         .status-failure { color: #d32f2f; font-weight: bold; }
-        .warning-box { background-color: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 4px; margin: 15px 0; }
     </style>
 </head>
 <body>
     <div class="header">
-        <h2>❌ Build Failed - Action Required</h2>
+        <h2>❌ Build Failed — Action Required</h2>
     </div>
-    
+
     <div class="warning-box">
         <strong>⚠️ ALERT:</strong> Your build has failed. Please review the errors below and take appropriate action.
     </div>
-    
+
     <div class="section">
         <h3>Build Information</h3>
         <div class="detail"><span class="label">Job Name:</span> <span class="value">${env.JOB_NAME}</span></div>
@@ -256,15 +350,35 @@ Please investigate and fix the build issues. Check the logs for more details. �
         <div class="detail"><span class="label">Timestamp:</span> <span class="value">${new Date().format('yyyy-MM-dd HH:mm:ss')}</span></div>
         <div class="detail"><span class="label">Branch:</span> <span class="value">${env.GIT_BRANCH ?: 'N/A'}</span></div>
     </div>
-    
+
     <div class="section">
-        <h3>Failure Details</h3>
-        <div class="detail"><span class="label">Failure Type:</span> <span class="value">Check logs for details</span></div>
-        <div class="detail"><span class="label">Stage Failed:</span> <span class="value">See console output</span></div>
+        <h3>📊 Test Results</h3>
+        <table class="stats-table">
+            <tr>
+                <td class="stat-total">🔢 Tests Run<br/><strong>${ts.total}</strong></td>
+                <td class="stat-pass">✅ Passed<br/><strong>${ts.passed}</strong></td>
+                <td class="stat-fail">❌ Failed<br/><strong>${ts.failed}</strong></td>
+                <td class="stat-skip">⏭️ Skipped<br/><strong>${ts.skipped}</strong></td>
+            </tr>
+        </table>
     </div>
-    
+
     <div class="section">
-        <h3>🔗 Documentation & Resources</h3>
+        <h3>❌ Failed Tests</h3>
+        <table class="failures-table">
+            <tr>
+                <th>#</th>
+                <th>Test Name</th>
+                <th>Class</th>
+                <th>Description</th>
+                <th>Impact</th>
+            </tr>
+            ${emailFailedRows}
+        </table>
+    </div>
+
+    <div class="section">
+        <h3>🔗 Resources</h3>
         <ul>
             <li><a href="${env.BUILD_URL}console">Full Console Output</a></li>
             <li><a href="${env.BUILD_URL}testReport">Test Failure Report</a></li>
@@ -272,28 +386,17 @@ Please investigate and fix the build issues. Check the logs for more details. �
             <li><a href="${env.BUILD_URL}">Full Build Details</a></li>
         </ul>
     </div>
-    
+
     <div class="section">
         <h3>Recommended Actions</h3>
         <ol>
             <li>Review the <strong>Console Output</strong> to identify the root cause</li>
             <li>Check the <strong>Test Report</strong> for failing test details</li>
-            <li>View the <strong>Full Build Log</strong> for complete error messages</li>
             <li>Fix the issues in your code and commit</li>
             <li>Push changes to trigger a new build</li>
         </ol>
     </div>
-    
-    <div class="section">
-        <h3>Need Help?</h3>
-        <p>If you need assistance debugging this build failure:</p>
-        <ul>
-            <li>Check recent changes in Git history</li>
-            <li>Review the Allure Report for visual test analytics</li>
-            <li>Contact the QA team or DevOps team for support</li>
-        </ul>
-    </div>
-    
+
     <div class="footer">
         <p>This automated notification was generated by Jenkins Pipeline for <strong>${env.JOB_NAME}</strong></p>
         <p>Generated at: ${new Date().format('yyyy-MM-dd HH:mm:ss')} | Build Server: ${env.JENKINS_URL}</p>
@@ -301,13 +404,14 @@ Please investigate and fix the build issues. Check the logs for more details. �
 </body>
 </html>
 """
-                    )
-                    } // end withCredentials
+                        )
+                    }
                     echo "✅ Email notification sent successfully"
                 } catch (Exception e) {
                     echo "⚠️  Email error: ${e.message} - Check SMTP configuration"
                 }
-                
+
+                // ── Artifacts ──────────────────────────────────────────
                 echo "[3/3] Archiving artifacts..."
                 archiveArtifacts artifacts: 'target/site/allure-maven-plugin/**,target/surefire-reports/**', allowEmptyArchive: true
                 junit allowEmptyResults: true, testResults: 'target/surefire-reports/*.xml'
@@ -315,9 +419,41 @@ Please investigate and fix the build issues. Check the logs for more details. �
                 echo "========== FAILURE NOTIFICATIONS COMPLETE =========="
             }
         }
+
         unstable {
             script {
                 echo "========== SENDING UNSTABLE BUILD NOTIFICATIONS =========="
+                def ts = getTestSummary(currentBuild)
+
+                // ── Build failed test list for Slack ───────────────────
+                def slackFailedList = ''
+                if (ts.failedTests.size() > 0) {
+                    ts.failedTests.eachWithIndex { t, i ->
+                        slackFailedList += "\n${i + 1}. ❌ *${t.name}* — ${t.className}\n   📝 *Description:* ${t.message}\n   ⚠️ *Impact:* ${t.impact}\n"
+                    }
+                } else {
+                    slackFailedList = '\nNo individual test data available — check the Allure Report.\n'
+                }
+
+                // ── Build failed test rows for Email ───────────────────
+                def emailFailedRows = ''
+                if (ts.failedTests.size() > 0) {
+                    ts.failedTests.eachWithIndex { t, i ->
+                        def rowColor = i % 2 == 0 ? '#fff5f5' : '#ffffff'
+                        emailFailedRows += """
+                        <tr style="background:${rowColor}">
+                            <td style="padding:10px;border:1px solid #ddd;color:#721c24;font-weight:bold;">${i + 1}</td>
+                            <td style="padding:10px;border:1px solid #ddd;font-weight:bold;">${t.name}</td>
+                            <td style="padding:10px;border:1px solid #ddd;color:#555;">${t.className}</td>
+                            <td style="padding:10px;border:1px solid #ddd;">${t.message}</td>
+                            <td style="padding:10px;border:1px solid #ddd;color:#c0392b;font-weight:bold;">${t.impact}</td>
+                        </tr>"""
+                    }
+                } else {
+                    emailFailedRows = '<tr><td colspan="5" style="padding:10px;border:1px solid #ddd;text-align:center;">No individual test data available — check the Allure Report.</td></tr>'
+                }
+
+                // ── Slack ──────────────────────────────────────────────
                 echo "[1/2] Sending Slack notification..."
                 try {
                     slackSend(
@@ -325,63 +461,104 @@ Please investigate and fix the build issues. Check the logs for more details. �
                         channel: '#jenkins-notifications',
                         botUser: false,
                         baseUrl: 'https://hooks.slack.com/services/',
-                        message: """⚠️  *BUILD UNSTABLE*
+                        message: """⚠️ *BUILD UNSTABLE*
 *Job:* ${env.JOB_NAME}
 *Build #:* ${env.BUILD_NUMBER}
 *Status:* UNSTABLE (Tests Failed)
 *Duration:* ${currentBuild.durationString}
 
+*📊 Test Results:*
+• Tests Run: ${ts.total}
+• ✅ Passed: ${ts.passed}
+• ❌ Failed: ${ts.failed}
+• ⏭️ Skipped: ${ts.skipped}
+
+*❌ Failed Tests:*${slackFailedList}
 *Details:*
-• Some tests may have failed or skipped
 • <${env.BUILD_URL}testReport|View Test Results>
 • <${env.BUILD_URL}Allure_20Report|View Detailed Report>
 • <${env.BUILD_URL}console|View Console>
 
-Please review test results and fix any failing tests. ⚠️"""
+Please review and fix the failing tests. ⚠️"""
                     )
                     echo "✅ Slack notification sent successfully"
                 } catch (Exception e) {
                     echo "⚠️  Slack error: ${e.message}"
                 }
-                
+
+                // ── Email ──────────────────────────────────────────────
                 echo "[2/2] Sending Email notification..."
                 try {
                     withCredentials([string(credentialsId: 'recipient-email', variable: 'RECIPIENT')]) {
-                    mail(
-                        to: RECIPIENT,
-                        subject: "⚠️  BUILD UNSTABLE: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-                        mimeType: 'text/html',
-                        body: """
+                        mail(
+                            to: RECIPIENT,
+                            subject: "⚠️ BUILD UNSTABLE: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                            mimeType: 'text/html',
+                            body: """
 <html>
 <head>
     <style>
         body { font-family: Arial, sans-serif; color: #333; }
         .header { background-color: #ff9800; color: white; padding: 20px; border-radius: 5px; margin-bottom: 20px; }
         .section { margin: 20px 0; padding: 15px; background-color: #f5f5f5; border-left: 4px solid #ff9800; }
-        .section h3 { margin-top: 0; color: #ff9800; }
+        .section h3 { margin-top: 0; color: #e65100; }
         .detail { margin: 8px 0; }
         .label { font-weight: bold; color: #333; }
         .value { color: #666; }
+        .stats-table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+        .stats-table td { padding: 10px 14px; border: 1px solid #ddd; text-align: center; font-size: 15px; }
+        .stat-total  { background: #e8f4fd; font-weight: bold; }
+        .stat-pass   { background: #d4edda; color: #155724; font-weight: bold; }
+        .stat-fail   { background: #f8d7da; color: #721c24; font-weight: bold; }
+        .stat-skip   { background: #fff3cd; color: #856404; font-weight: bold; }
+        .failures-table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13px; }
+        .failures-table th { background: #e65100; color: white; padding: 10px; text-align: left; border: 1px solid #bf360c; }
         .footer { margin-top: 30px; font-size: 12px; color: #999; border-top: 1px solid #ddd; padding-top: 10px; }
         a { color: #0066cc; text-decoration: none; }
         a:hover { text-decoration: underline; }
-        .status-unstable { color: #ff9800; font-weight: bold; }
+        .status-unstable { color: #e65100; font-weight: bold; }
     </style>
 </head>
 <body>
     <div class="header">
-        <h2>⚠️  Build Unstable - Review Required</h2>
+        <h2>⚠️ Build Unstable — Review Required</h2>
     </div>
-    
+
     <div class="section">
         <h3>Build Information</h3>
         <div class="detail"><span class="label">Job Name:</span> <span class="value">${env.JOB_NAME}</span></div>
         <div class="detail"><span class="label">Build Number:</span> <span class="value">#${env.BUILD_NUMBER}</span></div>
-        <div class="detail"><span class="label">Status:</span> <span class="value status-unstable">⚠️  UNSTABLE</span></div>
+        <div class="detail"><span class="label">Status:</span> <span class="value status-unstable">⚠️ UNSTABLE</span></div>
         <div class="detail"><span class="label">Reason:</span> <span class="value">Test failures detected</span></div>
         <div class="detail"><span class="label">Duration:</span> <span class="value">${currentBuild.durationString}</span></div>
     </div>
-    
+
+    <div class="section">
+        <h3>📊 Test Results</h3>
+        <table class="stats-table">
+            <tr>
+                <td class="stat-total">🔢 Tests Run<br/><strong>${ts.total}</strong></td>
+                <td class="stat-pass">✅ Passed<br/><strong>${ts.passed}</strong></td>
+                <td class="stat-fail">❌ Failed<br/><strong>${ts.failed}</strong></td>
+                <td class="stat-skip">⏭️ Skipped<br/><strong>${ts.skipped}</strong></td>
+            </tr>
+        </table>
+    </div>
+
+    <div class="section">
+        <h3>❌ Failed Tests</h3>
+        <table class="failures-table">
+            <tr>
+                <th>#</th>
+                <th>Test Name</th>
+                <th>Class</th>
+                <th>Description</th>
+                <th>Impact</th>
+            </tr>
+            ${emailFailedRows}
+        </table>
+    </div>
+
     <div class="section">
         <h3>Action Items</h3>
         <ul>
@@ -391,7 +568,7 @@ Please review test results and fix any failing tests. ⚠️"""
             <li><strong>Verify</strong> with a new build to ensure all tests pass</li>
         </ul>
     </div>
-    
+
     <div class="footer">
         <p>This automated notification was generated by Jenkins Pipeline for <strong>${env.JOB_NAME}</strong></p>
         <p>Generated at: ${new Date().format('yyyy-MM-dd HH:mm:ss')}</p>
@@ -399,8 +576,8 @@ Please review test results and fix any failing tests. ⚠️"""
 </body>
 </html>
 """
-                    )
-                    } // end withCredentials
+                        )
+                    }
                     echo "✅ Email notification sent successfully"
                 } catch (Exception e) {
                     echo "⚠️  Email error: ${e.message}"
@@ -408,6 +585,7 @@ Please review test results and fix any failing tests. ⚠️"""
                 echo "========== UNSTABLE NOTIFICATIONS COMPLETE =========="
             }
         }
+
         cleanup {
             echo "========== PIPELINE CLEANUP =========="
             cleanWs(deleteDirs: true, patterns: [[pattern: 'parse-results.ps1, slack-payload.json', type: 'INCLUDE']])
