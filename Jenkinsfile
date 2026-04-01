@@ -86,24 +86,29 @@ $skipped = 0
 $lines   = @()
 
 $files = Get-ChildItem "target\\surefire-reports\\TEST-*.xml" -ErrorAction SilentlyContinue
+Write-Output "Found $($files.Count) surefire XML file(s)"
+
 foreach ($f in $files) {
     [xml]$xml = Get-Content $f.FullName -Encoding UTF8
-    $testcases = $xml.SelectNodes("//testcase")
+    $suite = $xml.testsuite
+    $testcases = @($suite.testcase)
+    Write-Output "  $($f.Name): $($testcases.Count) testcase(s)"
     foreach ($tc in $testcases) {
+        if ($tc -eq $null) { continue }
         $total++
-        $failNode    = $tc.SelectSingleNode("failure")
-        $errorNode   = $tc.SelectSingleNode("error")
-        $skippedNode = $tc.SelectSingleNode("skipped")
-        if ($skippedNode) {
+        if ($tc.skipped -ne $null) {
             $skipped++
-        } elseif ($failNode -or $errorNode) {
+        } elseif ($tc.failure -ne $null -or $tc.error -ne $null) {
             $failed++
-            $fn  = if ($failNode) { $failNode } else { $errorNode }
-            $msg = if ($fn.GetAttribute("message")) { $fn.GetAttribute("message") } else { $fn.InnerText }
+            $fn  = if ($tc.failure -ne $null) { $tc.failure } else { $tc.error }
+            $msg = ""
+            if ($fn -is [System.Xml.XmlElement]) {
+                $msg = if ($fn.GetAttribute("message")) { $fn.GetAttribute("message") } else { $fn.InnerText }
+            } elseif ($fn -is [string]) {
+                $msg = $fn
+            }
             $msg = (($msg -split "`n")[0]).Trim() -replace "\\|\\|", "-"
-            $className = $tc.GetAttribute("classname")
-            $testName  = $tc.GetAttribute("name")
-            $lines += "TEST:" + $className + "||" + $testName + "||" + $msg
+            $lines += "TEST:" + $tc.classname + "||" + $tc.name + "||" + $msg
         }
     }
 }
@@ -117,7 +122,7 @@ $out = @(
 ) + $lines
 
 $out | Out-File -FilePath "test-summary.txt" -Encoding UTF8
-Write-Host "Parsed: total=$total passed=$passed failed=$failed skipped=$skipped"
+Write-Output "Done: total=$total passed=$passed failed=$failed skipped=$skipped"
 '''
                     bat 'powershell -NoProfile -ExecutionPolicy Bypass -File parse-tests.ps1'
                 }
