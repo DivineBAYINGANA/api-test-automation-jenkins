@@ -181,47 +181,48 @@ Write-Output "Done: total=$total passed=$passed failed=$failed skipped=$skipped"
                 catchError(buildResult: currentBuild.result ?: 'SUCCESS', stageResult: 'UNSTABLE') {
                     withCredentials([string(credentialsId: 'github-pat', variable: 'GH_PAT')]) {
                         writeFile file: 'publish-ghpages.ps1', text: '''
-$ErrorActionPreference = "Stop"
 $repo = "https://$env:GH_PAT@github.com/DivineBAYINGANA/api-test-automation-jenkins.git"
 
 if (Test-Path "gh-pages-deploy") {
     Remove-Item "gh-pages-deploy" -Recurse -Force
 }
 
-# Try to clone existing gh-pages branch
-$cloneResult = git clone --branch gh-pages --single-branch $repo gh-pages-deploy 2>&1
-if (-not (Test-Path "gh-pages-deploy/.git")) {
-    # Branch does not exist yet - init fresh
+# Try to clone existing gh-pages branch (redirect stderr so git progress does not kill the script)
+git clone --branch gh-pages --single-branch $repo gh-pages-deploy 2>&1 | Out-Null
+
+if (Test-Path "gh-pages-deploy/.git") {
+    Write-Output "Cloned existing gh-pages branch"
+    Push-Location "gh-pages-deploy"
+    # Clear old content but keep .git
+    Get-ChildItem -Force | Where-Object { $_.Name -ne ".git" } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+} else {
+    Write-Output "gh-pages branch not found - creating fresh"
     New-Item -ItemType Directory "gh-pages-deploy" | Out-Null
     Push-Location "gh-pages-deploy"
-    git init
-    git remote add origin $repo
-    git checkout -b gh-pages
-} else {
-    Push-Location "gh-pages-deploy"
+    git init 2>&1 | Out-Null
+    git remote add origin $repo 2>&1 | Out-Null
+    git checkout -b gh-pages 2>&1 | Out-Null
 }
-
-# Clear old content (keep .git)
-Get-ChildItem -Force | Where-Object { $_.Name -ne ".git" } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
 # Copy new allure report
 Copy-Item -Path "../target/site/allure-maven-plugin/*" -Destination "." -Recurse -Force
 
 git config user.email "jenkins@build"
 git config user.name "Jenkins CI"
-git add -A
+git add -A 2>&1 | Out-Null
 
-$diff = git diff --cached --name-only
-if ($diff) {
-    git commit -m "Allure report - build $env:BUILD_NUMBER"
-    git push origin gh-pages --force
-    Write-Output "Published successfully"
+$status = git status --porcelain
+if ($status) {
+    git commit -m "Allure report - build $env:BUILD_NUMBER" 2>&1 | Out-Null
+    git push origin gh-pages --force 2>&1 | Out-Null
+    Write-Output "Published successfully - build $env:BUILD_NUMBER"
 } else {
     Write-Output "No changes to publish"
 }
 
 Pop-Location
 Remove-Item "gh-pages-deploy" -Recurse -Force -ErrorAction SilentlyContinue
+Write-Output "Done"
 '''
                         bat """set BUILD_NUMBER=${env.BUILD_NUMBER}
                             powershell -NoProfile -ExecutionPolicy Bypass -File publish-ghpages.ps1"""
