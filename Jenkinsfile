@@ -1,5 +1,26 @@
 #!/usr/bin/env groovy
 
+// Posts directly to the incoming webhook URL stored in the credential.
+// Bypasses the Slack plugin entirely — no teamDomain, no baseUrl issues.
+def sendSlack(String color, String message) {
+    try {
+        def payload = groovy.json.JsonOutput.toJson([
+            attachments: [[
+                color    : color,
+                text     : message,
+                mrkdwn_in: ['text']
+            ]]
+        ])
+        writeFile file: 'slack-notify.json', text: payload
+        withCredentials([string(credentialsId: 'incoming-webhook', variable: 'SLACK_URL')]) {
+            bat 'powershell -NoProfile -ExecutionPolicy Bypass -Command "$b = Get-Content slack-notify.json -Raw; Invoke-RestMethod -Uri $env:SLACK_URL -Method Post -ContentType application/json -Body $b"'
+        }
+        echo "✅ Slack notification sent successfully"
+    } catch (Exception e) {
+        echo "⚠️  Slack error: ${e.message}"
+    }
+}
+
 def getTestSummary() {
     def summary = [total: 0, passed: 0, failed: 0, skipped: 0, failedTests: []]
     try {
@@ -169,13 +190,7 @@ Write-Output "Done: total=$total passed=$passed failed=$failed skipped=$skipped"
 
                 // ── Slack ──────────────────────────────────────────────
                 echo "[1/3] Sending Slack notification..."
-                try {
-                    slackSend(
-                        color: '#36a64f',
-                        channel: '#jenkins-bot',
-                        botUser: false,
-                        tokenCredentialId: 'incoming-webhook',
-                        message: """✅ *BUILD PASSED*
+                sendSlack('#36a64f', """✅ *BUILD PASSED*
 *Job:* ${env.JOB_NAME}
 *Build #:* ${env.BUILD_NUMBER}
 *Duration:* ${currentBuild.durationString}
@@ -188,18 +203,12 @@ Write-Output "Done: total=$total passed=$passed failed=$failed skipped=$skipped"
 • ⚠️ Reviewed: ${ts.failed}
 • ⏭️ Skipped: ${ts.skipped}
 
-*Reports & Details:*
+*Reports:*
 • <${env.BUILD_URL}|View Full Build>
-• <${env.BUILD_URL}testReport|View Test Results>
-• <${env.BUILD_URL}Allure_20Report|View Allure Report>
-• <${env.BUILD_URL}execution/node/2/ws|View Workspace>
+• <${env.BUILD_URL}testReport|Test Results>
+• <${env.BUILD_URL}Allure_20Report|Allure Report>
 
-All tests passed — great work! 🎉"""
-                    )
-                    echo "✅ Slack notification sent successfully"
-                } catch (Exception e) {
-                    echo "⚠️  Slack error: ${e.message}"
-                }
+All tests passed — great work! 🎉""")
 
                 // ── Email ──────────────────────────────────────────────
                 echo "[2/3] Sending Email notification..."
@@ -324,13 +333,7 @@ All tests passed — great work! 🎉"""
                 }
 
                 echo "[1/3] Sending Slack notification..."
-                try {
-                    slackSend(
-                        color: '#d32f2f',
-                        channel: '#jenkins-bot',
-                        botUser: false,
-                        tokenCredentialId: 'incoming-webhook',
-                        message: """🔴 *Build Requires Attention*
+                sendSlack('#d32f2f', """🔴 *Build Requires Attention*
 *Job:* ${env.JOB_NAME}
 *Build #:* ${env.BUILD_NUMBER}
 *Duration:* ${currentBuild.durationString}
@@ -345,12 +348,7 @@ All tests passed — great work! 🎉"""
 • <${env.BUILD_URL}|Full Build Log>
 • <${env.BUILD_URL}testReport|Test Results>
 • <${env.BUILD_URL}Allure_20Report|Allure Report>
-• <${env.BUILD_URL}console|Console Output>"""
-                    )
-                    echo "✅ Slack notification sent successfully"
-                } catch (Exception e) {
-                    echo "⚠️  Slack error: ${e.message}"
-                }
+• <${env.BUILD_URL}console|Console Output>""")
 
                 echo "[2/3] Sending Email notification..."
                 try {
@@ -498,13 +496,7 @@ All tests passed — great work! 🎉"""
                 }
 
                 echo "[1/2] Sending Slack notification..."
-                try {
-                    slackSend(
-                        color: '#ff9800',
-                        channel: '#jenkins-bot',
-                        botUser: false,
-                        tokenCredentialId: 'incoming-webhook',
-                        message: """⚠️ *Build Review Required*
+                sendSlack('#ff9800', """⚠️ *Build Review Required*
 *Job:* ${env.JOB_NAME}
 *Build #:* ${env.BUILD_NUMBER}
 *Duration:* ${currentBuild.durationString}
@@ -516,12 +508,7 @@ All tests passed — great work! 🎉"""
 *Links:*
 • <${env.BUILD_URL}testReport|Test Results>
 • <${env.BUILD_URL}Allure_20Report|Allure Report>
-• <${env.BUILD_URL}console|Console Output>"""
-                    )
-                    echo "✅ Slack notification sent successfully"
-                } catch (Exception e) {
-                    echo "⚠️  Slack error: ${e.message}"
-                }
+• <${env.BUILD_URL}console|Console Output>""")
 
                 echo "[2/2] Sending Email notification..."
                 try {
@@ -633,7 +620,7 @@ All tests passed — great work! 🎉"""
 
         cleanup {
             echo "========== PIPELINE CLEANUP =========="
-            cleanWs(deleteDirs: true, patterns: [[pattern: 'parse-tests.ps1, test-summary.txt', type: 'INCLUDE']])
+            cleanWs(deleteDirs: true, patterns: [[pattern: 'parse-tests.ps1, test-summary.txt, slack-notify.json', type: 'INCLUDE']])
             echo "========== PIPELINE COMPLETE =========="
         }
     }
