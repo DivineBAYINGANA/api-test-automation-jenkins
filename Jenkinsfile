@@ -121,7 +121,7 @@ $out = @(
     "SKIPPED:" + $skipped
 ) + $lines
 
-$out | Out-File -FilePath "test-summary.txt" -Encoding UTF8
+$out | Out-File -FilePath "test-summary.txt" -Encoding ASCII
 Write-Output "Done: total=$total passed=$passed failed=$failed skipped=$skipped"
 '''
                     bat 'powershell -NoProfile -ExecutionPolicy Bypass -File parse-tests.ps1'
