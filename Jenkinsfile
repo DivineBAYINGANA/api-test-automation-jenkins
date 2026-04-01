@@ -1,7 +1,6 @@
 #!/usr/bin/env groovy
 
-// Posts directly to the incoming webhook URL stored in the credential.
-// Bypasses the Slack plugin entirely — no teamDomain, no baseUrl issues.
+// ── Sends a plain-text Slack attachment (signature unchanged) ─────────────────
 def sendSlack(String color, String message) {
     try {
         def payload = groovy.json.JsonOutput.toJson([
@@ -21,6 +20,23 @@ def sendSlack(String color, String message) {
     }
 }
 
+// ── Sends a Block Kit payload (used for rich failure notifications) ────────────
+def sendSlackBlocks(String color, List blocks) {
+    try {
+        def payload = groovy.json.JsonOutput.toJson([
+            attachments: [[color: color, blocks: blocks]]
+        ])
+        writeFile file: 'slack-notify.json', text: payload
+        withCredentials([string(credentialsId: 'incoming-webhook', variable: 'SLACK_URL')]) {
+            bat 'powershell -NoProfile -ExecutionPolicy Bypass -Command "$b = Get-Content slack-notify.json -Raw; Invoke-RestMethod -Uri $env:SLACK_URL -Method Post -ContentType application/json -Body $b"'
+        }
+        echo "✅ Slack notification sent successfully"
+    } catch (Exception e) {
+        echo "⚠️  Slack error: ${e.message}"
+    }
+}
+
+// ── Reads test-summary.txt written by the Parse Test Results stage ────────────
 def getTestSummary() {
     def summary = [total: 0, passed: 0, failed: 0, skipped: 0, failedTests: []]
     try {
@@ -61,6 +77,65 @@ def getTestSummary() {
         echo "⚠️  Could not parse test summary: ${e.message}"
     }
     return summary
+}
+
+// ── Reads allure-results JSON for rich failure detail (id, severity, expected/actual)
+def getAllureFailures() {
+    def failures = []
+    try {
+        if (!fileExists('target/allure-results')) return failures
+        writeFile file: 'read-allure.ps1', text: '''
+$out = @()
+$files = Get-ChildItem "target/allure-results/*-result.json" -ErrorAction SilentlyContinue
+foreach ($f in $files) {
+    try {
+        $data = Get-Content $f.FullName -Raw | ConvertFrom-Json
+        if ($data.status -in @("failed","broken")) {
+            $name    = if ($data.name) { ($data.name -replace "\\|\\|","-").Trim() } else { "Unknown" }
+            $desc    = if ($data.description) { (($data.description -split "`n")[0]).Trim() -replace "\\|\\|","-" } else { "N/A" }
+            $fullMsg = if ($data.statusDetails -and $data.statusDetails.message) { $data.statusDetails.message } else { "N/A" }
+            $shortMsg= (($fullMsg -split "`n")[0]).Trim() -replace "\\|\\|","-"
+            $labels  = @{}
+            if ($data.labels) { foreach ($l in $data.labels) { $labels[$l.name] = $l.value } }
+            $aid      = if ($labels["allureId"]) { $labels["allureId"] } else { "N/A" }
+            $severity = if ($labels["severity"]) { $labels["severity"] } else { "normal" }
+            $tClass   = if ($labels["testClass"]) { ($labels["testClass"] -split "[.]")[-1] } else { "N/A" }
+            $expected = if ($fullMsg -match "Expected:[ ]*<(.*?)>")           { $Matches[1] } else { "N/A" }
+            $actual   = if ($fullMsg -match "(?:Actual|but was):[ ]*<(.*?)>") { $Matches[1] } else { "N/A" }
+            $out += "$aid||$name||$tClass||$severity||$desc||$shortMsg||$expected||$actual"
+        }
+    } catch { }
+}
+$writer = New-Object System.IO.StreamWriter("allure-failures.txt", $false, [System.Text.Encoding]::ASCII)
+foreach ($line in $out) { $writer.WriteLine($line) }
+$writer.Close()
+Write-Output "Allure: $($out.Count) failure(s) found"
+'''
+        bat 'powershell -NoProfile -ExecutionPolicy Bypass -File read-allure.ps1'
+        if (fileExists('allure-failures.txt')) {
+            def lines = readFile('allure-failures.txt').split('\n')
+            for (def line : lines) {
+                line = line.replaceAll('\r', '').trim()
+                if (line.isEmpty()) continue
+                def parts = line.split('\\|\\|', -1)
+                if (parts.length >= 8) {
+                    failures << [
+                        id       : parts[0].trim(),
+                        name     : parts[1].trim(),
+                        className: parts[2].trim(),
+                        severity : parts[3].trim().capitalize(),
+                        desc     : parts[4].trim(),
+                        message  : parts[5].trim(),
+                        expected : parts[6].trim(),
+                        actual   : parts[7].trim()
+                    ]
+                }
+            }
+        }
+    } catch (Exception e) {
+        echo "⚠️  Could not read allure failures: ${e.message}"
+    }
+    return failures
 }
 
 pipeline {
@@ -227,41 +302,51 @@ Write-Output "Done"
                         bat """set BUILD_NUMBER=${env.BUILD_NUMBER}
                             powershell -NoProfile -ExecutionPolicy Bypass -File publish-ghpages.ps1"""
                     }
-                    echo "Allure report published to https://divinebayin gana.github.io/api-test-automation-jenkins/"
+                    echo "Allure report published → https://divinebayingana.github.io/api-test-automation-jenkins/"
                 }
             }
         }
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
     post {
+
+        // ── SUCCESS ──────────────────────────────────────────────────────────
         success {
             script {
                 echo "========== SENDING SUCCESS NOTIFICATIONS =========="
-                def ts = getTestSummary()
+                def ts       = getTestSummary()
+                def passRate = ts.total > 0 ? (int)((ts.passed / ts.total) * 100) : 0
+                def REPORT   = 'https://divinebayingana.github.io/api-test-automation-jenkins/'
+                def ts_str   = new Date().format('dd MMM yyyy')
 
-                // ── Slack ──────────────────────────────────────────────
+                // ── Slack (Block Kit) ─────────────────────────────────────────
                 echo "[1/3] Sending Slack notification..."
-                sendSlack('#36a64f', """✅ *BUILD PASSED*
-*Job:* ${env.JOB_NAME}
-*Build #:* ${env.BUILD_NUMBER}
-*Duration:* ${currentBuild.durationString}
-*Branch:* ${env.GIT_BRANCH ?: 'N/A'}
-*Commit:* ${env.GIT_COMMIT?.take(7) ?: 'N/A'}
+                sendSlackBlocks('#2e7d32', [
+                    [type: 'header', text: [type: 'plain_text', text: '✅ API Tests PASSED', emoji: true]],
+                    [type: 'section', fields: [
+                        [type: 'mrkdwn', text: "*Total:* ${ts.total}"],
+                        [type: 'mrkdwn', text: "*Passed:* ${ts.passed}"],
+                        [type: 'mrkdwn', text: "*Failed:* ${ts.failed}"],
+                        [type: 'mrkdwn', text: "*Skipped:* ${ts.skipped}"],
+                        [type: 'mrkdwn', text: "*Pass Rate:* ${passRate}%"]
+                    ]],
+                    [type: 'section', fields: [
+                        [type: 'mrkdwn', text: "*Job:* ${env.JOB_NAME}"],
+                        [type: 'mrkdwn', text: "*Build:* #${env.BUILD_NUMBER}"],
+                        [type: 'mrkdwn', text: "*Branch:* ${env.GIT_BRANCH ?: 'N/A'}"],
+                        [type: 'mrkdwn', text: "*Commit:* ${env.GIT_COMMIT?.take(7) ?: 'N/A'}"]
+                    ]],
+                    [type: 'divider'],
+                    [type: 'actions', elements: [
+                        [type: 'button', text: [type: 'plain_text', text: 'View Allure Report', emoji: true],
+                         url: REPORT, style: 'primary'],
+                        [type: 'button', text: [type: 'plain_text', text: 'Build Log', emoji: true],
+                         url: "${env.BUILD_URL}"]
+                    ]]
+                ])
 
-*📊 Test Results:*
-• Tests Run: ${ts.total}
-• ✅ Passed: ${ts.passed}
-• ⚠️ Reviewed: ${ts.failed}
-• ⏭️ Skipped: ${ts.skipped}
-
-*Reports:*
-• <${env.BUILD_URL}|View Full Build>
-• <${env.BUILD_URL}testReport|Test Results>
-• <https://divinebayin gana.github.io/api-test-automation-jenkins/|Allure Report>
-
-All tests passed — great work! 🎉""")
-
-                // ── Email ──────────────────────────────────────────────
+                // ── Email ─────────────────────────────────────────────────────
                 echo "[2/3] Sending Email notification..."
                 try {
                     withCredentials([
@@ -269,74 +354,53 @@ All tests passed — great work! 🎉""")
                         string(credentialsId: 'gmail-address',   variable: 'SENDER')
                     ]) {
                         mail(
-                            from   : SENDER,
-                            to     : RECIPIENT,
-                            subject: "✅ Build Passed — ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                            from    : SENDER,
+                            to      : RECIPIENT,
+                            subject : "✅ Build Passed — ${env.JOB_NAME} #${env.BUILD_NUMBER}",
                             mimeType: 'text/html',
-                            body: """
-<html>
-<head>
-    <style>
-        body { font-family: Arial, sans-serif; color: #333; margin: 0; padding: 0; }
-        .header { background-color: #28a745; color: white; padding: 20px; border-radius: 5px 5px 0 0; margin-bottom: 0; }
-        .header h2 { margin: 0; font-size: 20px; }
-        .header p  { margin: 5px 0 0 0; opacity: 0.85; font-size: 13px; }
-        .body { padding: 20px; }
-        .section { margin: 16px 0; padding: 15px; background-color: #f9f9f9; border-left: 4px solid #28a745; border-radius: 0 4px 4px 0; }
-        .section h3 { margin-top: 0; color: #28a745; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; }
-        .detail { margin: 6px 0; font-size: 13px; }
-        .label { font-weight: bold; color: #555; }
-        .stats-table { width: 100%; border-collapse: collapse; margin: 8px 0; }
-        .stats-table td { padding: 12px 10px; border: 1px solid #e0e0e0; text-align: center; font-size: 14px; border-radius: 3px; }
-        .stat-total { background: #e8f4fd; }
-        .stat-pass  { background: #d4edda; color: #155724; font-weight: bold; }
-        .stat-review { background: #fff3cd; color: #856404; font-weight: bold; }
-        .stat-skip  { background: #f5f5f5; color: #666; }
-        .footer { margin-top: 24px; font-size: 11px; color: #aaa; border-top: 1px solid #eee; padding-top: 12px; }
-        a { color: #0066cc; text-decoration: none; }
-    </style>
-</head>
-<body>
-<div class="header">
-    <h2>✅ Build Completed Successfully</h2>
-    <p>${env.JOB_NAME} · Build #${env.BUILD_NUMBER}</p>
+                            body    : """<!DOCTYPE html><html><body style="margin:0;padding:20px;background:#f4f6f9;font-family:Arial,sans-serif">
+<div style="max-width:600px;margin:0 auto;background:#fff;border-radius:9px;overflow:hidden;border:1px solid #e8eaf0">
+  <div style="background:#1a237e;padding:27px;color:#fff">
+    <h1 style="margin:0;font-size:22px">API Test Build Passed</h1>
+    <p style="margin:5px 0 0;opacity:.8;font-size:13px">${env.JOB_NAME} &middot; Build #${env.BUILD_NUMBER}</p>
+  </div>
+  <div style="background:#e8f5e9;padding:16px;border-left:5px solid #2e7d32">
+    <p style="margin:0;font-size:17px;font-weight:700;color:#2e7d32">&#x2705; Build Passed on ${ts_str}</p>
+  </div>
+  <div style="padding:27px">
+    <table width="100%" style="font-size:13px;border-collapse:collapse;margin-bottom:24px">
+      <tr style="background:#f5f7ff">
+        <td style="padding:9px;font-weight:700;border-bottom:1px solid #e8eaf0">Metric</td>
+        <td style="padding:9px;font-weight:700;border-bottom:1px solid #e8eaf0">Value</td>
+      </tr>
+      <tr><td style="padding:9px;border-bottom:1px solid #f0f0f0">Job</td><td style="padding:9px;border-bottom:1px solid #f0f0f0">${env.JOB_NAME}</td></tr>
+      <tr><td style="padding:9px;border-bottom:1px solid #f0f0f0">Branch</td><td style="padding:9px;border-bottom:1px solid #f0f0f0">${env.GIT_BRANCH ?: 'N/A'}</td></tr>
+      <tr><td style="padding:9px;border-bottom:1px solid #f0f0f0">Duration</td><td style="padding:9px;border-bottom:1px solid #f0f0f0">${currentBuild.durationString}</td></tr>
+      <tr><td style="padding:9px;border-bottom:1px solid #f0f0f0">Pass Rate</td><td style="padding:9px;border-bottom:1px solid #f0f0f0"><strong>${passRate}%</strong></td></tr>
+      <tr><td style="padding:9px;border-bottom:1px solid #f0f0f0">Allure Report</td><td style="padding:9px;border-bottom:1px solid #f0f0f0"><a href="${REPORT}">View Hosted Report</a></td></tr>
+    </table>
+    <div style="display:flex;justify-content:space-around;text-align:center;margin-bottom:27px">
+      <div style="flex:1;background:#e8f5e9;padding:15px;margin:4px;border-radius:7px">
+        <div style="font-size:26px;font-weight:700;color:#2e7d32">${ts.passed}</div>
+        <div style="font-size:11px;color:#555;margin-top:4px">PASSED</div>
+      </div>
+      <div style="flex:1;background:#e8f4fd;padding:15px;margin:4px;border-radius:7px">
+        <div style="font-size:26px;font-weight:700;color:#1565c0">${ts.total}</div>
+        <div style="font-size:11px;color:#555;margin-top:4px">TOTAL</div>
+      </div>
+      <div style="flex:1;background:#fff3e0;padding:15px;margin:4px;border-radius:7px">
+        <div style="font-size:26px;font-weight:700;color:#e65100">${ts.skipped}</div>
+        <div style="font-size:11px;color:#555;margin-top:4px">SKIPPED</div>
+      </div>
+    </div>
+    <div style="text-align:center;margin-top:24px">
+      <a href="${REPORT}" style="display:inline-block;background:#1a237e;color:#fff;text-decoration:none;padding:12px 28px;border-radius:5px;font-weight:700;margin-right:8px">View Allure Report</a>
+      <a href="${env.BUILD_URL}" style="display:inline-block;background:#455a64;color:#fff;text-decoration:none;padding:12px 28px;border-radius:5px;font-weight:700">Build Log</a>
+    </div>
+  </div>
+  <div style="padding:12px 27px;font-size:11px;color:#aaa;border-top:1px solid #eee">Automated notification &middot; ${env.JOB_NAME} &middot; ${env.JENKINS_URL}</div>
 </div>
-<div class="body">
-    <div class="section">
-        <h3>Build Details</h3>
-        <div class="detail"><span class="label">Job:</span> ${env.JOB_NAME}</div>
-        <div class="detail"><span class="label">Build:</span> #${env.BUILD_NUMBER}</div>
-        <div class="detail"><span class="label">Branch:</span> ${env.GIT_BRANCH ?: 'N/A'}</div>
-        <div class="detail"><span class="label">Duration:</span> ${currentBuild.durationString}</div>
-        <div class="detail"><span class="label">Completed:</span> ${new Date().format('yyyy-MM-dd HH:mm:ss')}</div>
-    </div>
-
-    <div class="section">
-        <h3>📊 Test Summary</h3>
-        <table class="stats-table">
-            <tr>
-                <td class="stat-total">🔢 Total<br/><strong>${ts.total}</strong></td>
-                <td class="stat-pass">✅ Passed<br/><strong>${ts.passed}</strong></td>
-                <td class="stat-review">⚠️ Reviewed<br/><strong>${ts.failed}</strong></td>
-                <td class="stat-skip">⏭️ Skipped<br/><strong>${ts.skipped}</strong></td>
-            </tr>
-        </table>
-    </div>
-
-    <div class="section">
-        <h3>🔗 Reports</h3>
-        <div class="detail">• <a href="${env.BUILD_URL}">Build Log</a></div>
-        <div class="detail">• <a href="${env.BUILD_URL}testReport">Test Results</a></div>
-        <div class="detail">• <a href="https://divinebayin gana.github.io/api-test-automation-jenkins/">Allure Report</a></div>
-    </div>
-
-    <div class="footer">
-        Automated notification · ${env.JOB_NAME} · ${env.JENKINS_URL}
-    </div>
-</div>
-</body>
-</html>
-"""
+</body></html>"""
                         )
                     }
                     echo "✅ Email notification sent successfully"
@@ -352,154 +416,142 @@ All tests passed — great work! 🎉""")
             }
         }
 
+        // ── FAILURE ───────────────────────────────────────────────────────────
         failure {
             script {
                 echo "========== SENDING FAILURE NOTIFICATIONS =========="
-                def ts = getTestSummary()
+                def ts       = getTestSummary()
+                def af       = getAllureFailures()
+                def passRate = ts.total > 0 ? (int)((ts.passed / ts.total) * 100) : 0
+                def REPORT   = 'https://divinebayingana.github.io/api-test-automation-jenkins/'
+                def ts_str   = new Date().format('dd MMM yyyy')
 
-                def slackFailedList = ''
-                if (ts.failedTests.size() > 0) {
-                    ts.failedTests.eachWithIndex { t, i ->
-                        slackFailedList += "\n${i + 1}. *${t.name}* (${t.className})\n   📝 ${t.message}\n   ⚡ Area: ${t.impact}\n"
-                    }
-                } else {
-                    slackFailedList = '\nNo test data available — build may have failed before tests ran. Check console output.\n'
+                // Use allure failures if available, fall back to surefire data
+                def failures = af.size() > 0 ? af : ts.failedTests.collect { t ->
+                    [id: 'N/A', name: t.name, className: t.className, severity: 'Normal',
+                     desc: t.impact, message: t.message, expected: 'N/A', actual: 'N/A']
                 }
 
-                def emailTestRows = ''
-                if (ts.failedTests.size() > 0) {
-                    ts.failedTests.eachWithIndex { t, i ->
-                        def rowBg = i % 2 == 0 ? '#fff8f8' : '#ffffff'
-                        emailTestRows += """
-                        <tr style="background:${rowBg}">
-                            <td style="padding:10px;border:1px solid #e0e0e0;text-align:center;font-weight:bold;color:#c0392b;">${i + 1}</td>
-                            <td style="padding:10px;border:1px solid #e0e0e0;font-weight:bold;">${t.name}</td>
-                            <td style="padding:10px;border:1px solid #e0e0e0;color:#666;">${t.className}</td>
-                            <td style="padding:10px;border:1px solid #e0e0e0;">${t.message}</td>
-                            <td style="padding:10px;border:1px solid #e0e0e0;font-weight:bold;">${t.impact}</td>
-                        </tr>"""
-                    }
-                } else {
-                    emailTestRows = '<tr><td colspan="5" style="padding:12px;border:1px solid #e0e0e0;text-align:center;color:#888;">No individual test data — build may have failed before tests ran.</td></tr>'
-                }
-
+                // ── Slack (Block Kit) ─────────────────────────────────────────
                 echo "[1/3] Sending Slack notification..."
-                sendSlack('#d32f2f', """🔴 *Build Requires Attention*
-*Job:* ${env.JOB_NAME}
-*Build #:* ${env.BUILD_NUMBER}
-*Duration:* ${currentBuild.durationString}
-*Branch:* ${env.GIT_BRANCH ?: 'N/A'}
-*Commit:* ${env.GIT_COMMIT?.take(7) ?: 'N/A'}
+                def failBlocks = []
+                if (failures.size() > 0) {
+                    failBlocks << [type: 'section', text: [type: 'mrkdwn', text: '*&#x1F6A8; Detailed Failure Report:*']]
+                    failures.take(10).eachWithIndex { t, i ->
+                        failBlocks << [type: 'section', text: [type: 'mrkdwn', text:
+                            "*${i+1}. ${t.name}*\n" +
+                            "*ID:* `${t.id}`  |  *Severity:* `${t.severity}`  |  *Class:* `${t.className}`\n" +
+                            "*Description:* ${t.desc}\n" +
+                            "*Failure:* ${t.message}\n" +
+                            "*Expected:* `${t.expected}`    *Actual:* `${t.actual}`"
+                        ]]
+                        failBlocks << [type: 'divider']
+                    }
+                }
+                sendSlackBlocks('#b71c1c', [
+                    [type: 'header', text: [type: 'plain_text', text: '&#x1F534; API Tests FAILED', emoji: true]],
+                    [type: 'section', fields: [
+                        [type: 'mrkdwn', text: "*Total:* ${ts.total}"],
+                        [type: 'mrkdwn', text: "*Passed:* ${ts.passed}"],
+                        [type: 'mrkdwn', text: "*Failed:* ${ts.failed}"],
+                        [type: 'mrkdwn', text: "*Skipped:* ${ts.skipped}"],
+                        [type: 'mrkdwn', text: "*Pass Rate:* ${passRate}%"]
+                    ]],
+                    [type: 'section', fields: [
+                        [type: 'mrkdwn', text: "*Job:* ${env.JOB_NAME}"],
+                        [type: 'mrkdwn', text: "*Build:* #${env.BUILD_NUMBER}"],
+                        [type: 'mrkdwn', text: "*Branch:* ${env.GIT_BRANCH ?: 'N/A'}"],
+                        [type: 'mrkdwn', text: "*Commit:* ${env.GIT_COMMIT?.take(7) ?: 'N/A'}"]
+                    ]],
+                    [type: 'divider']
+                ] + failBlocks + [
+                    [type: 'actions', elements: [
+                        [type: 'button', text: [type: 'plain_text', text: 'View Allure Report', emoji: true],
+                         url: REPORT, style: 'primary'],
+                        [type: 'button', text: [type: 'plain_text', text: 'Build Log', emoji: true],
+                         url: "${env.BUILD_URL}"],
+                        [type: 'button', text: [type: 'plain_text', text: 'Console Output', emoji: true],
+                         url: "${env.BUILD_URL}console"]
+                    ]]
+                ])
 
-*📊 Test Results:*
-• Total: ${ts.total} · ✅ ${ts.passed} passed · ⚠️ ${ts.failed} to review · ⏭️ ${ts.skipped} skipped
-
-*Tests to Review:*${slackFailedList}
-*Links:*
-• <${env.BUILD_URL}|Full Build Log>
-• <${env.BUILD_URL}testReport|Test Results>
-• <https://divinebayin gana.github.io/api-test-automation-jenkins/|Allure Report>
-• <${env.BUILD_URL}console|Console Output>""")
-
+                // ── Email ─────────────────────────────────────────────────────
                 echo "[2/3] Sending Email notification..."
                 try {
+                    def failureCards = ''
+                    if (failures.size() > 0) {
+                        failures.each { t ->
+                            failureCards += """
+<div style="border:1px solid #ffcdd2;border-radius:7px;margin-bottom:16px;background:#fff;padding:15px;border-left:5px solid #b71c1c;">
+  <p style="margin:0;font-size:14px;font-weight:700;color:#b71c1c">[${t.id}] ${t.name}</p>
+  <p style="margin:3px 0;font-size:12px;color:#555"><b>Class:</b> ${t.className} &nbsp;|&nbsp; <b>Severity:</b> ${t.severity}</p>
+  <p style="margin:5px 0 9px;font-size:12px;color:#777;font-style:italic">${t.desc}</p>
+  <div style="background:#fdf2f2;padding:10px;border-radius:4px;margin-bottom:10px">
+    <table style="font-size:12px;border-collapse:collapse;width:100%">
+      <tr><td style="color:#555;padding:3px 8px 3px 0;width:70px"><b>Expected:</b></td><td style="color:#2e7d32;font-family:monospace">${t.expected}</td></tr>
+      <tr><td style="color:#555;padding:3px 8px 3px 0"><b>Actual:</b></td><td style="color:#b71c1c;font-family:monospace">${t.actual}</td></tr>
+    </table>
+  </div>
+  <div style="background:#f8f9fa;padding:10px;border-radius:4px;font-family:monospace;font-size:11px;color:#555;overflow-x:auto;border-left:3px solid #dee2e6">${t.message}</div>
+</div>"""
+                        }
+                    } else {
+                        failureCards = '<p style="color:#888;font-size:13px">No individual test data &mdash; build may have failed before tests ran.</p>'
+                    }
                     withCredentials([
                         string(credentialsId: 'recipient-email', variable: 'RECIPIENT'),
                         string(credentialsId: 'gmail-address',   variable: 'SENDER')
                     ]) {
                         mail(
-                            from   : SENDER,
-                            to     : RECIPIENT,
-                            subject: "🔴 Build Requires Attention — ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                            from    : SENDER,
+                            to      : RECIPIENT,
+                            subject : "&#x1F534; Build Failed — ${env.JOB_NAME} #${env.BUILD_NUMBER}",
                             mimeType: 'text/html',
-                            body: """
-<html>
-<head>
-    <style>
-        body { font-family: Arial, sans-serif; color: #333; margin: 0; padding: 0; }
-        .header { background-color: #c0392b; color: white; padding: 20px; border-radius: 5px 5px 0 0; }
-        .header h2 { margin: 0; font-size: 20px; }
-        .header p  { margin: 5px 0 0 0; opacity: 0.85; font-size: 13px; }
-        .body { padding: 20px; }
-        .section { margin: 16px 0; padding: 15px; background-color: #f9f9f9; border-left: 4px solid #c0392b; border-radius: 0 4px 4px 0; }
-        .section h3 { margin-top: 0; color: #c0392b; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; }
-        .detail { margin: 6px 0; font-size: 13px; }
-        .label { font-weight: bold; color: #555; }
-        .stats-table { width: 100%; border-collapse: collapse; margin: 8px 0; }
-        .stats-table td { padding: 12px 10px; border: 1px solid #e0e0e0; text-align: center; font-size: 14px; }
-        .stat-total  { background: #e8f4fd; }
-        .stat-pass   { background: #d4edda; color: #155724; font-weight: bold; }
-        .stat-review { background: #fff3cd; color: #856404; font-weight: bold; }
-        .stat-skip   { background: #f5f5f5; color: #666; }
-        .test-table  { width: 100%; border-collapse: collapse; font-size: 12px; }
-        .test-table th { background: #c0392b; color: white; padding: 10px; text-align: left; }
-        .footer { margin-top: 24px; font-size: 11px; color: #aaa; border-top: 1px solid #eee; padding-top: 12px; }
-        a { color: #0066cc; text-decoration: none; }
-    </style>
-</head>
-<body>
-<div class="header">
-    <h2>🔴 Build Requires Attention</h2>
-    <p>${env.JOB_NAME} · Build #${env.BUILD_NUMBER}</p>
+                            body    : """<!DOCTYPE html><html><body style="margin:0;padding:20px;background:#f4f6f9;font-family:Arial,sans-serif">
+<div style="max-width:600px;margin:0 auto;background:#fff;border-radius:9px;overflow:hidden;border:1px solid #e8eaf0">
+  <div style="background:#1a237e;padding:27px;color:#fff">
+    <h1 style="margin:0;font-size:22px">API Test Build Failed</h1>
+    <p style="margin:5px 0 0;opacity:.8;font-size:13px">${env.JOB_NAME} &middot; Build #${env.BUILD_NUMBER}</p>
+  </div>
+  <div style="background:#ffebee;padding:16px;border-left:5px solid #b71c1c">
+    <p style="margin:0;font-size:17px;font-weight:700;color:#b71c1c">&#x274C; Build Failed on ${ts_str}</p>
+  </div>
+  <div style="padding:27px">
+    <table width="100%" style="font-size:13px;border-collapse:collapse;margin-bottom:24px">
+      <tr style="background:#f5f7ff">
+        <td style="padding:9px;font-weight:700;border-bottom:1px solid #e8eaf0">Metric</td>
+        <td style="padding:9px;font-weight:700;border-bottom:1px solid #e8eaf0">Value</td>
+      </tr>
+      <tr><td style="padding:9px;border-bottom:1px solid #f0f0f0">Job</td><td style="padding:9px;border-bottom:1px solid #f0f0f0">${env.JOB_NAME}</td></tr>
+      <tr><td style="padding:9px;border-bottom:1px solid #f0f0f0">Branch</td><td style="padding:9px;border-bottom:1px solid #f0f0f0">${env.GIT_BRANCH ?: 'N/A'}</td></tr>
+      <tr><td style="padding:9px;border-bottom:1px solid #f0f0f0">Duration</td><td style="padding:9px;border-bottom:1px solid #f0f0f0">${currentBuild.durationString}</td></tr>
+      <tr><td style="padding:9px;border-bottom:1px solid #f0f0f0">Pass Rate</td><td style="padding:9px;border-bottom:1px solid #f0f0f0"><strong>${passRate}%</strong></td></tr>
+      <tr><td style="padding:9px;border-bottom:1px solid #f0f0f0">Allure Report</td><td style="padding:9px;border-bottom:1px solid #f0f0f0"><a href="${REPORT}">View Hosted Report</a></td></tr>
+    </table>
+    <div style="display:flex;justify-content:space-around;text-align:center;margin-bottom:24px">
+      <div style="flex:1;background:#e8f5e9;padding:15px;margin:4px;border-radius:7px">
+        <div style="font-size:26px;font-weight:700;color:#2e7d32">${ts.passed}</div>
+        <div style="font-size:11px;color:#555;margin-top:4px">PASSED</div>
+      </div>
+      <div style="flex:1;background:#ffebee;padding:15px;margin:4px;border-radius:7px">
+        <div style="font-size:26px;font-weight:700;color:#b71c1c">${ts.failed}</div>
+        <div style="font-size:11px;color:#555;margin-top:4px">FAILED</div>
+      </div>
+      <div style="flex:1;background:#e8f4fd;padding:15px;margin:4px;border-radius:7px">
+        <div style="font-size:26px;font-weight:700;color:#1565c0">${ts.total}</div>
+        <div style="font-size:11px;color:#555;margin-top:4px">TOTAL</div>
+      </div>
+    </div>
+    <h2 style="font-size:16px;color:#b71c1c;margin:24px 0 12px">&#x1F6A8; Detailed Failure Report</h2>
+    ${failureCards}
+    <div style="text-align:center;margin-top:24px">
+      <a href="${REPORT}" style="display:inline-block;background:#1a237e;color:#fff;text-decoration:none;padding:12px 28px;border-radius:5px;font-weight:700;margin-right:8px">View Allure Report</a>
+      <a href="${env.BUILD_URL}console" style="display:inline-block;background:#455a64;color:#fff;text-decoration:none;padding:12px 28px;border-radius:5px;font-weight:700">Console Output</a>
+    </div>
+  </div>
+  <div style="padding:12px 27px;font-size:11px;color:#aaa;border-top:1px solid #eee">Automated notification &middot; ${env.JOB_NAME} &middot; ${env.JENKINS_URL}</div>
 </div>
-<div class="body">
-    <div class="section">
-        <h3>Build Details</h3>
-        <div class="detail"><span class="label">Job:</span> ${env.JOB_NAME}</div>
-        <div class="detail"><span class="label">Build:</span> #${env.BUILD_NUMBER}</div>
-        <div class="detail"><span class="label">Branch:</span> ${env.GIT_BRANCH ?: 'N/A'}</div>
-        <div class="detail"><span class="label">Duration:</span> ${currentBuild.durationString}</div>
-        <div class="detail"><span class="label">Timestamp:</span> ${new Date().format('yyyy-MM-dd HH:mm:ss')}</div>
-    </div>
-
-    <div class="section">
-        <h3>📊 Test Summary</h3>
-        <table class="stats-table">
-            <tr>
-                <td class="stat-total">🔢 Total<br/><strong>${ts.total}</strong></td>
-                <td class="stat-pass">✅ Passed<br/><strong>${ts.passed}</strong></td>
-                <td class="stat-review">⚠️ To Review<br/><strong>${ts.failed}</strong></td>
-                <td class="stat-skip">⏭️ Skipped<br/><strong>${ts.skipped}</strong></td>
-            </tr>
-        </table>
-    </div>
-
-    <div class="section">
-        <h3>🔍 Tests to Review</h3>
-        <table class="test-table">
-            <tr>
-                <th>#</th>
-                <th>Test Name</th>
-                <th>Class</th>
-                <th>Description</th>
-                <th>Area</th>
-            </tr>
-            ${emailTestRows}
-        </table>
-    </div>
-
-    <div class="section">
-        <h3>🔗 Resources</h3>
-        <div class="detail">• <a href="${env.BUILD_URL}console">Console Output</a></div>
-        <div class="detail">• <a href="${env.BUILD_URL}testReport">Test Results</a></div>
-        <div class="detail">• <a href="https://divinebayin gana.github.io/api-test-automation-jenkins/">Allure Report</a></div>
-        <div class="detail">• <a href="${env.BUILD_URL}">Full Build Details</a></div>
-    </div>
-
-    <div class="section">
-        <h3>Next Steps</h3>
-        <div class="detail">1. Review the console output to identify the root cause</div>
-        <div class="detail">2. Check the Allure Report for detailed test analytics</div>
-        <div class="detail">3. Apply fixes and push to trigger a new build</div>
-    </div>
-
-    <div class="footer">
-        Automated notification · ${env.JOB_NAME} · ${env.JENKINS_URL}
-    </div>
-</div>
-</body>
-</html>
-"""
+</body></html>"""
                         )
                     }
                     echo "✅ Email notification sent successfully"
@@ -515,150 +567,142 @@ All tests passed — great work! 🎉""")
             }
         }
 
+        // ── UNSTABLE ──────────────────────────────────────────────────────────
         unstable {
             script {
                 echo "========== SENDING BUILD REVIEW NOTIFICATIONS =========="
-                def ts = getTestSummary()
+                def ts       = getTestSummary()
+                def af       = getAllureFailures()
+                def passRate = ts.total > 0 ? (int)((ts.passed / ts.total) * 100) : 0
+                def REPORT   = 'https://divinebayingana.github.io/api-test-automation-jenkins/'
+                def ts_str   = new Date().format('dd MMM yyyy')
 
-                def slackFailedList = ''
-                if (ts.failedTests.size() > 0) {
-                    ts.failedTests.eachWithIndex { t, i ->
-                        slackFailedList += "\n${i + 1}. *${t.name}* (${t.className})\n   📝 ${t.message}\n   ⚡ Area: ${t.impact}\n"
-                    }
-                } else {
-                    slackFailedList = '\nNo individual test data available — check the Allure Report.\n'
+                // Use allure failures if available, fall back to surefire data
+                def failures = af.size() > 0 ? af : ts.failedTests.collect { t ->
+                    [id: 'N/A', name: t.name, className: t.className, severity: 'Normal',
+                     desc: t.impact, message: t.message, expected: 'N/A', actual: 'N/A']
                 }
 
-                def emailTestRows = ''
-                if (ts.failedTests.size() > 0) {
-                    ts.failedTests.eachWithIndex { t, i ->
-                        def rowBg = i % 2 == 0 ? '#fff8f8' : '#ffffff'
-                        emailTestRows += """
-                        <tr style="background:${rowBg}">
-                            <td style="padding:10px;border:1px solid #e0e0e0;text-align:center;font-weight:bold;color:#c0392b;">${i + 1}</td>
-                            <td style="padding:10px;border:1px solid #e0e0e0;font-weight:bold;">${t.name}</td>
-                            <td style="padding:10px;border:1px solid #e0e0e0;color:#666;">${t.className}</td>
-                            <td style="padding:10px;border:1px solid #e0e0e0;">${t.message}</td>
-                            <td style="padding:10px;border:1px solid #e0e0e0;font-weight:bold;">${t.impact}</td>
-                        </tr>"""
-                    }
-                } else {
-                    emailTestRows = '<tr><td colspan="5" style="padding:12px;border:1px solid #e0e0e0;text-align:center;color:#888;">No individual test data available — check the Allure Report.</td></tr>'
-                }
-
+                // ── Slack (Block Kit) ─────────────────────────────────────────
                 echo "[1/2] Sending Slack notification..."
-                sendSlack('#ff9800', """⚠️ *Build Review Required*
-*Job:* ${env.JOB_NAME}
-*Build #:* ${env.BUILD_NUMBER}
-*Duration:* ${currentBuild.durationString}
+                def failBlocks = []
+                if (failures.size() > 0) {
+                    failBlocks << [type: 'section', text: [type: 'mrkdwn', text: '*&#x1F6A8; Detailed Failure Report:*']]
+                    failures.take(10).eachWithIndex { t, i ->
+                        failBlocks << [type: 'section', text: [type: 'mrkdwn', text:
+                            "*${i+1}. ${t.name}*\n" +
+                            "*ID:* `${t.id}`  |  *Severity:* `${t.severity}`  |  *Class:* `${t.className}`\n" +
+                            "*Description:* ${t.desc}\n" +
+                            "*Failure:* ${t.message}\n" +
+                            "*Expected:* `${t.expected}`    *Actual:* `${t.actual}`"
+                        ]]
+                        failBlocks << [type: 'divider']
+                    }
+                }
+                sendSlackBlocks('#e65100', [
+                    [type: 'header', text: [type: 'plain_text', text: '&#x26A0;&#xFE0F; API Tests — Review Required', emoji: true]],
+                    [type: 'section', fields: [
+                        [type: 'mrkdwn', text: "*Total:* ${ts.total}"],
+                        [type: 'mrkdwn', text: "*Passed:* ${ts.passed}"],
+                        [type: 'mrkdwn', text: "*Failed:* ${ts.failed}"],
+                        [type: 'mrkdwn', text: "*Skipped:* ${ts.skipped}"],
+                        [type: 'mrkdwn', text: "*Pass Rate:* ${passRate}%"]
+                    ]],
+                    [type: 'section', fields: [
+                        [type: 'mrkdwn', text: "*Job:* ${env.JOB_NAME}"],
+                        [type: 'mrkdwn', text: "*Build:* #${env.BUILD_NUMBER}"],
+                        [type: 'mrkdwn', text: "*Branch:* ${env.GIT_BRANCH ?: 'N/A'}"],
+                        [type: 'mrkdwn', text: "*Commit:* ${env.GIT_COMMIT?.take(7) ?: 'N/A'}"]
+                    ]],
+                    [type: 'divider']
+                ] + failBlocks + [
+                    [type: 'actions', elements: [
+                        [type: 'button', text: [type: 'plain_text', text: 'View Allure Report', emoji: true],
+                         url: REPORT, style: 'primary'],
+                        [type: 'button', text: [type: 'plain_text', text: 'Test Results', emoji: true],
+                         url: "${env.BUILD_URL}testReport"],
+                        [type: 'button', text: [type: 'plain_text', text: 'Console Output', emoji: true],
+                         url: "${env.BUILD_URL}console"]
+                    ]]
+                ])
 
-*📊 Test Results:*
-• Total: ${ts.total} · ✅ ${ts.passed} passed · ⚠️ ${ts.failed} to review · ⏭️ ${ts.skipped} skipped
-
-*Tests to Review:*${slackFailedList}
-*Links:*
-• <${env.BUILD_URL}testReport|Test Results>
-• <https://divinebayingana.github.io/api-test-automation-jenkins/|Allure Report>
-• <${env.BUILD_URL}console|Console Output>""")
-
+                // ── Email ─────────────────────────────────────────────────────
                 echo "[2/2] Sending Email notification..."
                 try {
+                    def failureCards = ''
+                    if (failures.size() > 0) {
+                        failures.each { t ->
+                            failureCards += """
+<div style="border:1px solid #ffcdd2;border-radius:7px;margin-bottom:16px;background:#fff;padding:15px;border-left:5px solid #b71c1c;">
+  <p style="margin:0;font-size:14px;font-weight:700;color:#b71c1c">[${t.id}] ${t.name}</p>
+  <p style="margin:3px 0;font-size:12px;color:#555"><b>Class:</b> ${t.className} &nbsp;|&nbsp; <b>Severity:</b> ${t.severity}</p>
+  <p style="margin:5px 0 9px;font-size:12px;color:#777;font-style:italic">${t.desc}</p>
+  <div style="background:#fdf2f2;padding:10px;border-radius:4px;margin-bottom:10px">
+    <table style="font-size:12px;border-collapse:collapse;width:100%">
+      <tr><td style="color:#555;padding:3px 8px 3px 0;width:70px"><b>Expected:</b></td><td style="color:#2e7d32;font-family:monospace">${t.expected}</td></tr>
+      <tr><td style="color:#555;padding:3px 8px 3px 0"><b>Actual:</b></td><td style="color:#b71c1c;font-family:monospace">${t.actual}</td></tr>
+    </table>
+  </div>
+  <div style="background:#f8f9fa;padding:10px;border-radius:4px;font-family:monospace;font-size:11px;color:#555;overflow-x:auto;border-left:3px solid #dee2e6">${t.message}</div>
+</div>"""
+                        }
+                    } else {
+                        failureCards = '<p style="color:#888;font-size:13px">No individual test data available &mdash; check the Allure Report.</p>'
+                    }
                     withCredentials([
                         string(credentialsId: 'recipient-email', variable: 'RECIPIENT'),
                         string(credentialsId: 'gmail-address',   variable: 'SENDER')
                     ]) {
                         mail(
-                            from   : SENDER,
-                            to     : RECIPIENT,
-                            subject: "⚠️ Build Review Required — ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                            from    : SENDER,
+                            to      : RECIPIENT,
+                            subject : "&#x26A0;&#xFE0F; Build Review Required — ${env.JOB_NAME} #${env.BUILD_NUMBER}",
                             mimeType: 'text/html',
-                            body: """
-<html>
-<head>
-    <style>
-        body { font-family: Arial, sans-serif; color: #333; margin: 0; padding: 0; }
-        .header { background-color: #e67e22; color: white; padding: 20px; border-radius: 5px 5px 0 0; }
-        .header h2 { margin: 0; font-size: 20px; }
-        .header p  { margin: 5px 0 0 0; opacity: 0.85; font-size: 13px; }
-        .body { padding: 20px; }
-        .section { margin: 16px 0; padding: 15px; background-color: #f9f9f9; border-left: 4px solid #e67e22; border-radius: 0 4px 4px 0; }
-        .section h3 { margin-top: 0; color: #e67e22; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; }
-        .detail { margin: 6px 0; font-size: 13px; }
-        .label { font-weight: bold; color: #555; }
-        .stats-table { width: 100%; border-collapse: collapse; margin: 8px 0; }
-        .stats-table td { padding: 12px 10px; border: 1px solid #e0e0e0; text-align: center; font-size: 14px; }
-        .stat-total  { background: #e8f4fd; }
-        .stat-pass   { background: #d4edda; color: #155724; font-weight: bold; }
-        .stat-review { background: #fff3cd; color: #856404; font-weight: bold; }
-        .stat-skip   { background: #f5f5f5; color: #666; }
-        .test-table  { width: 100%; border-collapse: collapse; font-size: 12px; }
-        .test-table th { background: #e67e22; color: white; padding: 10px; text-align: left; }
-        .footer { margin-top: 24px; font-size: 11px; color: #aaa; border-top: 1px solid #eee; padding-top: 12px; }
-        a { color: #0066cc; text-decoration: none; }
-    </style>
-</head>
-<body>
-<div class="header">
-    <h2>⚠️ Build Review Required</h2>
-    <p>${env.JOB_NAME} · Build #${env.BUILD_NUMBER}</p>
+                            body    : """<!DOCTYPE html><html><body style="margin:0;padding:20px;background:#f4f6f9;font-family:Arial,sans-serif">
+<div style="max-width:600px;margin:0 auto;background:#fff;border-radius:9px;overflow:hidden;border:1px solid #e8eaf0">
+  <div style="background:#1a237e;padding:27px;color:#fff">
+    <h1 style="margin:0;font-size:22px">API Test Build &mdash; Review Required</h1>
+    <p style="margin:5px 0 0;opacity:.8;font-size:13px">${env.JOB_NAME} &middot; Build #${env.BUILD_NUMBER}</p>
+  </div>
+  <div style="background:#fff3e0;padding:16px;border-left:5px solid #e65100">
+    <p style="margin:0;font-size:17px;font-weight:700;color:#e65100">&#x26A0;&#xFE0F; Tests require attention &mdash; ${ts_str}</p>
+  </div>
+  <div style="padding:27px">
+    <table width="100%" style="font-size:13px;border-collapse:collapse;margin-bottom:24px">
+      <tr style="background:#f5f7ff">
+        <td style="padding:9px;font-weight:700;border-bottom:1px solid #e8eaf0">Metric</td>
+        <td style="padding:9px;font-weight:700;border-bottom:1px solid #e8eaf0">Value</td>
+      </tr>
+      <tr><td style="padding:9px;border-bottom:1px solid #f0f0f0">Job</td><td style="padding:9px;border-bottom:1px solid #f0f0f0">${env.JOB_NAME}</td></tr>
+      <tr><td style="padding:9px;border-bottom:1px solid #f0f0f0">Branch</td><td style="padding:9px;border-bottom:1px solid #f0f0f0">${env.GIT_BRANCH ?: 'N/A'}</td></tr>
+      <tr><td style="padding:9px;border-bottom:1px solid #f0f0f0">Duration</td><td style="padding:9px;border-bottom:1px solid #f0f0f0">${currentBuild.durationString}</td></tr>
+      <tr><td style="padding:9px;border-bottom:1px solid #f0f0f0">Pass Rate</td><td style="padding:9px;border-bottom:1px solid #f0f0f0"><strong>${passRate}%</strong></td></tr>
+      <tr><td style="padding:9px;border-bottom:1px solid #f0f0f0">Allure Report</td><td style="padding:9px;border-bottom:1px solid #f0f0f0"><a href="${REPORT}">View Hosted Report</a></td></tr>
+    </table>
+    <div style="display:flex;justify-content:space-around;text-align:center;margin-bottom:24px">
+      <div style="flex:1;background:#e8f5e9;padding:15px;margin:4px;border-radius:7px">
+        <div style="font-size:26px;font-weight:700;color:#2e7d32">${ts.passed}</div>
+        <div style="font-size:11px;color:#555;margin-top:4px">PASSED</div>
+      </div>
+      <div style="flex:1;background:#ffebee;padding:15px;margin:4px;border-radius:7px">
+        <div style="font-size:26px;font-weight:700;color:#b71c1c">${ts.failed}</div>
+        <div style="font-size:11px;color:#555;margin-top:4px">TO REVIEW</div>
+      </div>
+      <div style="flex:1;background:#e8f4fd;padding:15px;margin:4px;border-radius:7px">
+        <div style="font-size:26px;font-weight:700;color:#1565c0">${ts.total}</div>
+        <div style="font-size:11px;color:#555;margin-top:4px">TOTAL</div>
+      </div>
+    </div>
+    <h2 style="font-size:16px;color:#b71c1c;margin:24px 0 12px">&#x1F6A8; Detailed Failure Report</h2>
+    ${failureCards}
+    <div style="text-align:center;margin-top:24px">
+      <a href="${REPORT}" style="display:inline-block;background:#1a237e;color:#fff;text-decoration:none;padding:12px 28px;border-radius:5px;font-weight:700;margin-right:8px">View Allure Report</a>
+      <a href="${env.BUILD_URL}testReport" style="display:inline-block;background:#455a64;color:#fff;text-decoration:none;padding:12px 28px;border-radius:5px;font-weight:700">Test Results</a>
+    </div>
+  </div>
+  <div style="padding:12px 27px;font-size:11px;color:#aaa;border-top:1px solid #eee">Automated notification &middot; ${env.JOB_NAME} &middot; ${env.JENKINS_URL}</div>
 </div>
-<div class="body">
-    <div class="section">
-        <h3>Build Details</h3>
-        <div class="detail"><span class="label">Job:</span> ${env.JOB_NAME}</div>
-        <div class="detail"><span class="label">Build:</span> #${env.BUILD_NUMBER}</div>
-        <div class="detail"><span class="label">Duration:</span> ${currentBuild.durationString}</div>
-        <div class="detail"><span class="label">Timestamp:</span> ${new Date().format('yyyy-MM-dd HH:mm:ss')}</div>
-    </div>
-
-    <div class="section">
-        <h3>📊 Test Summary</h3>
-        <table class="stats-table">
-            <tr>
-                <td class="stat-total">🔢 Total<br/><strong>${ts.total}</strong></td>
-                <td class="stat-pass">✅ Passed<br/><strong>${ts.passed}</strong></td>
-                <td class="stat-review">⚠️ To Review<br/><strong>${ts.failed}</strong></td>
-                <td class="stat-skip">⏭️ Skipped<br/><strong>${ts.skipped}</strong></td>
-            </tr>
-        </table>
-    </div>
-
-    <div class="section">
-        <h3>🔍 Tests to Review</h3>
-        <table class="test-table">
-            <tr>
-                <th>#</th>
-                <th>Test Name</th>
-                <th>Class</th>
-                <th>Description</th>
-                <th>Area</th>
-            </tr>
-            ${emailTestRows}
-        </table>
-    </div>
-
-    <div class="section">
-        <h3>🔗 Resources</h3>
-        <div class="detail">• <a href="${env.BUILD_URL}testReport">Test Results</a></div>
-        <div class="detail">• <a href="https://divinebayingana.github.io/api-test-automation-jenkins/">Allure Report</a></div>
-        <div class="detail">• <a href="${env.BUILD_URL}console">Console Output</a></div>
-        <div class="detail">• <a href="${env.BUILD_URL}">Full Build Details</a></div>
-    </div>
-
-    <div class="section">
-        <h3>Next Steps</h3>
-        <div class="detail">1. Review the tests listed above and examine the Allure Report for detailed analytics</div>
-        <div class="detail">2. Apply the necessary fixes and push to trigger a new build</div>
-        <div class="detail">3. Verify all tests pass on the next run</div>
-    </div>
-
-    <div class="footer">
-        Automated notification · ${env.JOB_NAME} · ${env.JENKINS_URL}
-    </div>
-</div>
-</body>
-</html>
-"""
+</body></html>"""
                         )
                     }
                     echo "✅ Email notification sent successfully"
@@ -671,7 +715,7 @@ All tests passed — great work! 🎉""")
 
         cleanup {
             echo "========== PIPELINE CLEANUP =========="
-            cleanWs(deleteDirs: true, patterns: [[pattern: 'parse-tests.ps1, test-summary.txt, slack-notify.json, publish-ghpages.ps1, gh-pages-deploy', type: 'INCLUDE']])
+            cleanWs(deleteDirs: true, patterns: [[pattern: 'parse-tests.ps1, read-allure.ps1, test-summary.txt, allure-failures.txt, slack-notify.json, publish-ghpages.ps1, gh-pages-deploy', type: 'INCLUDE']])
             echo "========== PIPELINE COMPLETE =========="
         }
     }
