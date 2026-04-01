@@ -79,32 +79,45 @@ pipeline {
         stage('Parse Test Results') {
             steps {
                 catchError(buildResult: currentBuild.result ?: 'SUCCESS', stageResult: 'UNSTABLE') {
-                    bat '''
-                        powershell -NoProfile -Command ^
-                        "$total=0; $passed=0; $failed=0; $skipped=0; $lines=@(); ^
-                        $files = Get-ChildItem 'target\\surefire-reports\\TEST-*.xml' -ErrorAction SilentlyContinue; ^
-                        foreach ($f in $files) { ^
-                            [xml]$xml = Get-Content $f.FullName -Encoding UTF8; ^
-                            $s = $xml.testsuite; ^
-                            $total  += [int]$s.tests; ^
-                            $failed += [int]$s.failures + [int]$s.errors; ^
-                            $skipped += [int]$s.skipped; ^
-                            foreach ($tc in @($s.testcase)) { ^
-                                $fn = $null; ^
-                                if ($tc.failure) { $fn = $tc.failure } ^
-                                elseif ($tc.error) { $fn = $tc.error }; ^
-                                if ($fn) { ^
-                                    $msg = ''; ^
-                                    if ($fn -is [System.Xml.XmlElement]) { $msg = if ($fn.message) { $fn.message } else { $fn.InnerText } }; ^
-                                    $msg = (($msg -split '`n')[0]).Trim() -replace '\\|\\|', '-'; ^
-                                    $lines += 'TEST:' + $tc.classname + '||' + $tc.name + '||' + $msg ^
-                                } ^
-                            } ^
-                        }; ^
-                        $passed = $total - $failed - $skipped; ^
-                        $out = @('TOTAL:' + $total, 'PASSED:' + $passed, 'FAILED:' + $failed, 'SKIPPED:' + $skipped) + $lines; ^
-                        $out | Out-File -FilePath 'test-summary.txt' -Encoding UTF8"
-                    '''
+                    writeFile file: 'parse-tests.ps1', text: '''
+$total   = 0
+$failed  = 0
+$skipped = 0
+$lines   = @()
+
+$files = Get-ChildItem "target\\surefire-reports\\TEST-*.xml" -ErrorAction SilentlyContinue
+foreach ($f in $files) {
+    [xml]$xml = Get-Content $f.FullName -Encoding UTF8
+    $s = $xml.testsuite
+    $total   += [int]$s.tests
+    $failed  += [int]$s.failures + [int]$s.errors
+    $skipped += [int]$s.skipped
+    foreach ($tc in @($s.testcase)) {
+        $fn = $null
+        if ($tc.failure)     { $fn = $tc.failure }
+        elseif ($tc.error)   { $fn = $tc.error }
+        if ($fn) {
+            $msg = ""
+            if ($fn -is [System.Xml.XmlElement]) {
+                $msg = if ($fn.message) { $fn.message } else { $fn.InnerText }
+            }
+            $msg = (($msg -split "`n")[0]).Trim() -replace "\\|\\|", "-"
+            $lines += "TEST:" + $tc.classname + "||" + $tc.name + "||" + $msg
+        }
+    }
+}
+
+$passed = $total - $failed - $skipped
+$out = @(
+    "TOTAL:"   + $total,
+    "PASSED:"  + $passed,
+    "FAILED:"  + $failed,
+    "SKIPPED:" + $skipped
+) + $lines
+
+$out | Out-File -FilePath "test-summary.txt" -Encoding UTF8
+'''
+                    bat 'powershell -NoProfile -ExecutionPolicy Bypass -File parse-tests.ps1'
                 }
             }
         }
