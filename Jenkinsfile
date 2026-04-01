@@ -558,7 +558,7 @@ All tests passed — great work! 🎉""")
 *Tests to Review:*${slackFailedList}
 *Links:*
 • <${env.BUILD_URL}testReport|Test Results>
-• <https://divinebayin gana.github.io/api-test-automation-jenkins/|Allure Report>
+• <https://divinebayingana.github.io/api-test-automation-jenkins/|Allure Report>
 • <${env.BUILD_URL}console|Console Output>""")
 
                 echo "[2/2] Sending Email notification..."
