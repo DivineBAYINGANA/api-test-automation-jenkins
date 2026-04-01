@@ -190,8 +190,8 @@ if (Test-Path "gh-pages-deploy") {
 
 # Try to clone existing gh-pages branch
 $cloneResult = git clone --branch gh-pages --single-branch $repo gh-pages-deploy 2>&1
-if (-not (Test-Path "gh-pages-deploy\.git")) {
-    # Branch doesn't exist yet — init fresh
+if (-not (Test-Path "gh-pages-deploy/.git")) {
+    # Branch does not exist yet - init fresh
     New-Item -ItemType Directory "gh-pages-deploy" | Out-Null
     Push-Location "gh-pages-deploy"
     git init
@@ -639,7 +639,7 @@ All tests passed — great work! 🎉""")
     <div class="section">
         <h3>🔗 Resources</h3>
         <div class="detail">• <a href="${env.BUILD_URL}testReport">Test Results</a></div>
-        <div class="detail">• <a href="https://divinebayingana.github.io/api-test-automation-jenkins/">Allure Report</a></div>
+        <div class="detail">• <a href="https://divinebayin gana.github.io/api-test-automation-jenkins/">Allure Report</a></div>
         <div class="detail">• <a href="${env.BUILD_URL}console">Console Output</a></div>
         <div class="detail">• <a href="${env.BUILD_URL}">Full Build Details</a></div>
     </div>
