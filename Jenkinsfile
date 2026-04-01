@@ -165,18 +165,68 @@ Write-Output "Done: total=$total passed=$passed failed=$failed skipped=$skipped"
                         bat 'mvn allure:report -B'
                     }
                     if (fileExists('target/site/allure-maven-plugin/index.html')) {
-                        echo "Allure report found and publishing..."
-                        publishHTML([
-                            allowMissing         : true,
-                            alwaysLinkToLastBuild: true,
-                            keepAll              : true,
-                            reportDir            : 'target/site/allure-maven-plugin',
-                            reportFiles          : 'index.html',
-                            reportName           : 'Allure Report'
-                        ])
+                        echo "Allure report generated successfully."
                     } else {
                         echo "Warning: Allure report not found at expected location."
                     }
+                }
+            }
+        }
+
+        stage('Publish to GitHub Pages') {
+            when {
+                expression { fileExists('target/site/allure-maven-plugin/index.html') }
+            }
+            steps {
+                catchError(buildResult: currentBuild.result ?: 'SUCCESS', stageResult: 'UNSTABLE') {
+                    withCredentials([string(credentialsId: 'github-pat', variable: 'GH_PAT')]) {
+                        writeFile file: 'publish-ghpages.ps1', text: '''
+$ErrorActionPreference = "Stop"
+$repo = "https://$env:GH_PAT@github.com/DivineBAYINGANA/api-test-automation-jenkins.git"
+
+if (Test-Path "gh-pages-deploy") {
+    Remove-Item "gh-pages-deploy" -Recurse -Force
+}
+
+# Try to clone existing gh-pages branch
+$cloneResult = git clone --branch gh-pages --single-branch $repo gh-pages-deploy 2>&1
+if (-not (Test-Path "gh-pages-deploy\.git")) {
+    # Branch doesn't exist yet — init fresh
+    New-Item -ItemType Directory "gh-pages-deploy" | Out-Null
+    Push-Location "gh-pages-deploy"
+    git init
+    git remote add origin $repo
+    git checkout -b gh-pages
+} else {
+    Push-Location "gh-pages-deploy"
+}
+
+# Clear old content (keep .git)
+Get-ChildItem -Force | Where-Object { $_.Name -ne ".git" } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+# Copy new allure report
+Copy-Item -Path "../target/site/allure-maven-plugin/*" -Destination "." -Recurse -Force
+
+git config user.email "jenkins@build"
+git config user.name "Jenkins CI"
+git add -A
+
+$diff = git diff --cached --name-only
+if ($diff) {
+    git commit -m "Allure report - build $env:BUILD_NUMBER"
+    git push origin gh-pages --force
+    Write-Output "Published successfully"
+} else {
+    Write-Output "No changes to publish"
+}
+
+Pop-Location
+Remove-Item "gh-pages-deploy" -Recurse -Force -ErrorAction SilentlyContinue
+'''
+                        bat """set BUILD_NUMBER=${env.BUILD_NUMBER}
+                            powershell -NoProfile -ExecutionPolicy Bypass -File publish-ghpages.ps1"""
+                    }
+                    echo "Allure report published to https://divinebayin gana.github.io/api-test-automation-jenkins/"
                 }
             }
         }
@@ -206,7 +256,7 @@ Write-Output "Done: total=$total passed=$passed failed=$failed skipped=$skipped"
 *Reports:*
 • <${env.BUILD_URL}|View Full Build>
 • <${env.BUILD_URL}testReport|Test Results>
-• <${env.BUILD_URL}Allure_20Report|Allure Report>
+• <https://divinebayin gana.github.io/api-test-automation-jenkins/|Allure Report>
 
 All tests passed — great work! 🎉""")
 
@@ -276,7 +326,7 @@ All tests passed — great work! 🎉""")
         <h3>🔗 Reports</h3>
         <div class="detail">• <a href="${env.BUILD_URL}">Build Log</a></div>
         <div class="detail">• <a href="${env.BUILD_URL}testReport">Test Results</a></div>
-        <div class="detail">• <a href="${env.BUILD_URL}Allure_20Report">Allure Report</a></div>
+        <div class="detail">• <a href="https://divinebayin gana.github.io/api-test-automation-jenkins/">Allure Report</a></div>
     </div>
 
     <div class="footer">
@@ -347,7 +397,7 @@ All tests passed — great work! 🎉""")
 *Links:*
 • <${env.BUILD_URL}|Full Build Log>
 • <${env.BUILD_URL}testReport|Test Results>
-• <${env.BUILD_URL}Allure_20Report|Allure Report>
+• <https://divinebayin gana.github.io/api-test-automation-jenkins/|Allure Report>
 • <${env.BUILD_URL}console|Console Output>""")
 
                 echo "[2/3] Sending Email notification..."
@@ -431,7 +481,7 @@ All tests passed — great work! 🎉""")
         <h3>🔗 Resources</h3>
         <div class="detail">• <a href="${env.BUILD_URL}console">Console Output</a></div>
         <div class="detail">• <a href="${env.BUILD_URL}testReport">Test Results</a></div>
-        <div class="detail">• <a href="${env.BUILD_URL}Allure_20Report">Allure Report</a></div>
+        <div class="detail">• <a href="https://divinebayin gana.github.io/api-test-automation-jenkins/">Allure Report</a></div>
         <div class="detail">• <a href="${env.BUILD_URL}">Full Build Details</a></div>
     </div>
 
@@ -507,7 +557,7 @@ All tests passed — great work! 🎉""")
 *Tests to Review:*${slackFailedList}
 *Links:*
 • <${env.BUILD_URL}testReport|Test Results>
-• <${env.BUILD_URL}Allure_20Report|Allure Report>
+• <https://divinebayin gana.github.io/api-test-automation-jenkins/|Allure Report>
 • <${env.BUILD_URL}console|Console Output>""")
 
                 echo "[2/2] Sending Email notification..."
@@ -589,7 +639,7 @@ All tests passed — great work! 🎉""")
     <div class="section">
         <h3>🔗 Resources</h3>
         <div class="detail">• <a href="${env.BUILD_URL}testReport">Test Results</a></div>
-        <div class="detail">• <a href="${env.BUILD_URL}Allure_20Report">Allure Report</a></div>
+        <div class="detail">• <a href="https://divinebayingana.github.io/api-test-automation-jenkins/">Allure Report</a></div>
         <div class="detail">• <a href="${env.BUILD_URL}console">Console Output</a></div>
         <div class="detail">• <a href="${env.BUILD_URL}">Full Build Details</a></div>
     </div>
@@ -620,7 +670,7 @@ All tests passed — great work! 🎉""")
 
         cleanup {
             echo "========== PIPELINE CLEANUP =========="
-            cleanWs(deleteDirs: true, patterns: [[pattern: 'parse-tests.ps1, test-summary.txt, slack-notify.json', type: 'INCLUDE']])
+            cleanWs(deleteDirs: true, patterns: [[pattern: 'parse-tests.ps1, test-summary.txt, slack-notify.json, publish-ghpages.ps1, gh-pages-deploy', type: 'INCLUDE']])
             echo "========== PIPELINE COMPLETE =========="
         }
     }
