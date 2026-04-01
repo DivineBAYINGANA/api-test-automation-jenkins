@@ -172,9 +172,9 @@ Write-Output "Done: total=$total passed=$passed failed=$failed skipped=$skipped"
                 try {
                     slackSend(
                         color: '#36a64f',
-                        channel: '#jenkins-notifications',
+                        channel: '#jenkins-bot',
                         botUser: false,
-                        baseUrl: 'https://hooks.slack.com/services/',
+                        tokenCredentialId: 'incoming-webhook',
                         message: """✅ *BUILD PASSED*
 *Job:* ${env.JOB_NAME}
 *Build #:* ${env.BUILD_NUMBER}
@@ -327,9 +327,9 @@ All tests passed — great work! 🎉"""
                 try {
                     slackSend(
                         color: '#d32f2f',
-                        channel: '#jenkins-notifications',
+                        channel: '#jenkins-bot',
                         botUser: false,
-                        baseUrl: 'https://hooks.slack.com/services/',
+                        tokenCredentialId: 'incoming-webhook',
                         message: """🔴 *Build Requires Attention*
 *Job:* ${env.JOB_NAME}
 *Build #:* ${env.BUILD_NUMBER}
@@ -501,9 +501,9 @@ All tests passed — great work! 🎉"""
                 try {
                     slackSend(
                         color: '#ff9800',
-                        channel: '#jenkins-notifications',
+                        channel: '#jenkins-bot',
                         botUser: false,
-                        baseUrl: 'https://hooks.slack.com/services/',
+                        tokenCredentialId: 'incoming-webhook',
                         message: """⚠️ *Build Review Required*
 *Job:* ${env.JOB_NAME}
 *Build #:* ${env.BUILD_NUMBER}
