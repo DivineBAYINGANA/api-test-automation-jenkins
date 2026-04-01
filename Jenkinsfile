@@ -136,7 +136,7 @@ $summaryLines = @()
 $allureLines  = @()
 
 # ── 1. Parse surefire XML files ──────────────────────────────────────────────
-$files = Get-ChildItem "target\\surefire-reports\\TEST-*.xml" -ErrorAction SilentlyContinue
+$files = Get-ChildItem "target/surefire-reports/TEST-*.xml" -ErrorAction SilentlyContinue
 Write-Output "Found $($files.Count) surefire XML file(s)"
 
 foreach ($f in $files) {
@@ -156,7 +156,7 @@ foreach ($f in $files) {
             if ($fn -is [System.Xml.XmlElement]) {
                 $msg = if ($fn.GetAttribute("message")) { $fn.GetAttribute("message") } else { $fn.InnerText }
             } elseif ($fn -is [string]) { $msg = $fn }
-            $msg = (($msg -split "`n")[0]).Trim() -replace "\\|\\|", "-"
+            $msg = (($msg -split "`n")[0]).Trim() -replace "\|\|", "-"
             $summaryLines += "TEST:" + $tc.classname + "||" + $tc.name + "||" + $msg
         }
     }
@@ -165,27 +165,27 @@ foreach ($f in $files) {
 $passed = $total - $failed - $skipped
 
 # ── 2. Parse allure-results JSON files for rich failure detail ───────────────
-$allureDir = "target\allure-results"
+$allureDir = "target/allure-results"
 if (Test-Path $allureDir) {
-    $jsonFiles = Get-ChildItem "$allureDir\*-result.json" -ErrorAction SilentlyContinue
+    $jsonFiles = Get-ChildItem "$allureDir/*-result.json" -ErrorAction SilentlyContinue
     Write-Output "Found $($jsonFiles.Count) allure result JSON file(s)"
     foreach ($jf in $jsonFiles) {
         try {
             $data = Get-Content $jf.FullName -Raw | ConvertFrom-Json
             if ($data.status -in @("failed", "broken")) {
-                $tName   = if ($data.name) { ($data.name -replace "\\|\\|","-").Trim() } else { "Unknown" }
-                $desc    = if ($data.description) { (($data.description -split "`n")[0]).Trim() -replace "\\|\\|","-" } else { "N/A" }
+                $tName   = if ($data.name) { ($data.name -replace "\|\|","-").Trim() } else { "Unknown" }
+                $desc    = if ($data.description) { (($data.description -split "`n")[0]).Trim() -replace "\|\|","-" } else { "N/A" }
                 $fullMsg = if ($data.statusDetails -and $data.statusDetails.message) { $data.statusDetails.message } else { "N/A" }
-                $shortMsg= (($fullMsg -split "`n")[0]).Trim() -replace "\\|\\|","-"
+                $shortMsg= (($fullMsg -split "`n")[0]).Trim() -replace "\|\|","-"
 
                 $labels = @{}
                 if ($data.labels) { foreach ($label in $data.labels) { $labels[$label.name] = $label.value } }
                 $allureId  = if ($labels["allureId"])  { $labels["allureId"]  } else { "N/A" }
                 $severity  = if ($labels["severity"])  { $labels["severity"]  } else { "normal" }
-                $testClass = if ($labels["testClass"]) { ($labels["testClass"] -split "\.")[-1] } else { "N/A" }
+                $testClass = if ($labels["testClass"]) { ($labels["testClass"] -split "[.]")[-1] } else { "N/A" }
 
-                $expected = if ($fullMsg -match "Expected:\s*<(.*?)>")           { $Matches[1] } else { "N/A" }
-                $actual   = if ($fullMsg -match "(?:Actual|but was):\s*<(.*?)>") { $Matches[1] } else { "N/A" }
+                $expected = if ($fullMsg -match "Expected:[ ]*<(.*?)>")           { $Matches[1] } else { "N/A" }
+                $actual   = if ($fullMsg -match "(?:Actual|but was):[ ]*<(.*?)>") { $Matches[1] } else { "N/A" }
 
                 $allureLines += "ALLURE:$allureId||$tName||$testClass||$severity||$desc||$shortMsg||$expected||$actual"
             }
