@@ -88,21 +88,22 @@ $lines   = @()
 $files = Get-ChildItem "target\\surefire-reports\\TEST-*.xml" -ErrorAction SilentlyContinue
 foreach ($f in $files) {
     [xml]$xml = Get-Content $f.FullName -Encoding UTF8
-    $s = $xml.testsuite
-    $total   += [int]$s.tests
-    $failed  += [int]$s.failures + [int]$s.errors
-    $skipped += [int]$s.skipped
-    foreach ($tc in @($s.testcase)) {
-        $fn = $null
-        if ($tc.failure)     { $fn = $tc.failure }
-        elseif ($tc.error)   { $fn = $tc.error }
-        if ($fn) {
-            $msg = ""
-            if ($fn -is [System.Xml.XmlElement]) {
-                $msg = if ($fn.message) { $fn.message } else { $fn.InnerText }
-            }
+    $testcases = $xml.SelectNodes("//testcase")
+    foreach ($tc in $testcases) {
+        $total++
+        $failNode    = $tc.SelectSingleNode("failure")
+        $errorNode   = $tc.SelectSingleNode("error")
+        $skippedNode = $tc.SelectSingleNode("skipped")
+        if ($skippedNode) {
+            $skipped++
+        } elseif ($failNode -or $errorNode) {
+            $failed++
+            $fn  = if ($failNode) { $failNode } else { $errorNode }
+            $msg = if ($fn.GetAttribute("message")) { $fn.GetAttribute("message") } else { $fn.InnerText }
             $msg = (($msg -split "`n")[0]).Trim() -replace "\\|\\|", "-"
-            $lines += "TEST:" + $tc.classname + "||" + $tc.name + "||" + $msg
+            $className = $tc.GetAttribute("classname")
+            $testName  = $tc.GetAttribute("name")
+            $lines += "TEST:" + $className + "||" + $testName + "||" + $msg
         }
     }
 }
@@ -116,6 +117,7 @@ $out = @(
 ) + $lines
 
 $out | Out-File -FilePath "test-summary.txt" -Encoding UTF8
+Write-Host "Parsed: total=$total passed=$passed failed=$failed skipped=$skipped"
 '''
                     bat 'powershell -NoProfile -ExecutionPolicy Bypass -File parse-tests.ps1'
                 }
