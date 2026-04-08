@@ -323,7 +323,7 @@ Write-Output "Done"
                 // ── Slack (Block Kit) ─────────────────────────────────────────
                 echo "[1/3] Sending Slack notification..."
                 sendSlackBlocks('#2e7d32', [
-                    [type: 'header', text: [type: 'plain_text', text: '✅ API Tests PASSED', emoji: true]],
+                    [type: 'header', text: [type: 'plain_text', text: '✅ FakeStore API Tests PASSED', emoji: true]],
                     [type: 'section', fields: [
                         [type: 'mrkdwn', text: "*Total:* ${ts.total}"],
                         [type: 'mrkdwn', text: "*Passed:* ${ts.passed}"],
@@ -361,7 +361,7 @@ Write-Output "Done"
                             body    : """<!DOCTYPE html><html><body style="margin:0;padding:20px;background:#f4f6f9;font-family:Arial,sans-serif">
 <div style="max-width:600px;margin:0 auto;background:#fff;border-radius:9px;overflow:hidden;border:1px solid #e8eaf0">
   <div style="background:#1a237e;padding:27px;color:#fff">
-    <h1 style="margin:0;font-size:22px">API Test Build Passed</h1>
+    <h1 style="margin:0;font-size:22px">FakeStore API Test Build Passed</h1>
     <p style="margin:5px 0 0;opacity:.8;font-size:13px">${env.JOB_NAME} &middot; Build #${env.BUILD_NUMBER}</p>
   </div>
   <div style="background:#e8f5e9;padding:16px;border-left:5px solid #2e7d32">
@@ -449,7 +449,7 @@ Write-Output "Done"
                     }
                 }
                 sendSlackBlocks('#b71c1c', [
-                    [type: 'header', text: [type: 'plain_text', text: '&#x1F534; API Tests FAILED', emoji: true]],
+                    [type: 'header', text: [type: 'plain_text', text: '&#x1F534; FakeStore API Tests FAILED', emoji: true]],
                     [type: 'section', fields: [
                         [type: 'mrkdwn', text: "*Total:* ${ts.total}"],
                         [type: 'mrkdwn', text: "*Passed:* ${ts.passed}"],
@@ -510,7 +510,7 @@ Write-Output "Done"
                             body    : """<!DOCTYPE html><html><body style="margin:0;padding:20px;background:#f4f6f9;font-family:Arial,sans-serif">
 <div style="max-width:600px;margin:0 auto;background:#fff;border-radius:9px;overflow:hidden;border:1px solid #e8eaf0">
   <div style="background:#1a237e;padding:27px;color:#fff">
-    <h1 style="margin:0;font-size:22px">API Test Build Failed</h1>
+    <h1 style="margin:0;font-size:22px">FakeStore API Test Build Failed</h1>
     <p style="margin:5px 0 0;opacity:.8;font-size:13px">${env.JOB_NAME} &middot; Build #${env.BUILD_NUMBER}</p>
   </div>
   <div style="background:#ffebee;padding:16px;border-left:5px solid #b71c1c">
@@ -600,7 +600,7 @@ Write-Output "Done"
                     }
                 }
                 sendSlackBlocks('#e65100', [
-                    [type: 'header', text: [type: 'plain_text', text: '&#x26A0;&#xFE0F; API Tests — Review Required', emoji: true]],
+                    [type: 'header', text: [type: 'plain_text', text: '&#x26A0;&#xFE0F; FakeStore API Tests — Review Required', emoji: true]],
                     [type: 'section', fields: [
                         [type: 'mrkdwn', text: "*Total:* ${ts.total}"],
                         [type: 'mrkdwn', text: "*Passed:* ${ts.passed}"],
@@ -661,7 +661,7 @@ Write-Output "Done"
                             body    : """<!DOCTYPE html><html><body style="margin:0;padding:20px;background:#f4f6f9;font-family:Arial,sans-serif">
 <div style="max-width:600px;margin:0 auto;background:#fff;border-radius:9px;overflow:hidden;border:1px solid #e8eaf0">
   <div style="background:#1a237e;padding:27px;color:#fff">
-    <h1 style="margin:0;font-size:22px">API Test Build &mdash; Review Required</h1>
+    <h1 style="margin:0;font-size:22px">FakeStore API Test Build &mdash; Review Required</h1>
     <p style="margin:5px 0 0;opacity:.8;font-size:13px">${env.JOB_NAME} &middot; Build #${env.BUILD_NUMBER}</p>
   </div>
   <div style="background:#fff3e0;padding:16px;border-left:5px solid #e65100">
