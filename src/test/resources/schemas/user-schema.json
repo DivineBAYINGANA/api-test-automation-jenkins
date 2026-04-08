@@ -1,39 +1,37 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "User",
-  "description": "Schema for a single User resource from API Test Automation",
+  "title": "UserSchema",
   "type": "object",
-  "required": ["id", "name", "username", "email"],
   "properties": {
-    "id":       { "type": "integer", "minimum": 1 },
-    "name":     { "type": "string",  "minLength": 1 },
-    "username": { "type": "string",  "minLength": 1 },
-    "email":    { "type": "string",  "format": "email" },
-    "phone":    { "type": "string" },
-    "website":  { "type": "string" },
+    "id": { "type": "integer" },
+    "email": { "type": "string" },
+    "username": { "type": "string" },
+    "password": { "type": "string" },
+    "name": {
+      "type": "object",
+      "properties": {
+        "firstname": { "type": "string" },
+        "lastname": { "type": "string" }
+      },
+      "required": ["firstname", "lastname"]
+    },
     "address": {
       "type": "object",
       "properties": {
-        "street":  { "type": "string" },
-        "suite":   { "type": "string" },
-        "city":    { "type": "string" },
+        "city": { "type": "string" },
+        "street": { "type": "string" },
+        "number": { "type": "integer" },
         "zipcode": { "type": "string" },
-        "geo": {
+        "geolocation": {
           "type": "object",
           "properties": {
             "lat": { "type": "string" },
-            "lng": { "type": "string" }
+            "long": { "type": "string" }
           }
         }
       }
     },
-    "company": {
-      "type": "object",
-      "properties": {
-        "name":        { "type": "string" },
-        "catchPhrase": { "type": "string" },
-        "bs":          { "type": "string" }
-      }
-    }
-  }
+    "phone": { "type": "string" }
+  },
+  "required": ["id", "email", "username", "name"]
 }

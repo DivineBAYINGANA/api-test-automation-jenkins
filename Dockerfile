@@ -1,5 +1,5 @@
 # ============================================================
-# API Test Automation - REST Assured Test Suite
+# FakeStore API Test Automation - REST Assured Test Suite
 # Dockerfile for containerized test execution
 # ============================================================
 
@@ -7,7 +7,7 @@
 FROM maven:3.9.6-eclipse-temurin-21 AS builder
 
 LABEL maintainer="API Testing Team"
-LABEL description="Containerized API test suite using REST Assured + JUnit 5 + Allure"
+LABEL description="Containerized FakeStore API test suite using REST Assured + JUnit 5 + Allure"
 
 # Set working directory
 WORKDIR /app

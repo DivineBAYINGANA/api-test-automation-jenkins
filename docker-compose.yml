@@ -13,7 +13,7 @@ services:
       context: .
       dockerfile: Dockerfile
       target: builder
-    container_name: divines-api-test-runner
+    container_name: divines-fakestore-api-test-runner
     volumes:
       # Mount results and reports back to host for inspection/CI
       - ./target/allure-results:/app/target/allure-results

@@ -24,7 +24,7 @@ public class GetUserTests extends TestBase {
     @AllureId("U-001")
     @DisplayName("GET /users — should return 200 with 10 users")
     @Severity(SeverityLevel.BLOCKER)
-    @Description("API: GET /users. Verifies that the endpoint returns HTTP 200 and a list of 10 users. Checks that each user object contains id, name, email, and username fields. Issue: Endpoint may return incorrect user count or missing fields.")
+    @Description("API: GET /users. Verifies that the endpoint returns HTTP 200 and a list of 10 users.")
     void testGetAllUsers_ShouldReturn200WithUsersList() {
         given()
                 .spec(requestSpec)
@@ -34,22 +34,23 @@ public class GetUserTests extends TestBase {
                 .statusCode(ApiConfig.STATUS_OK)
                 .body("$.size()", equalTo(UserDataFactory.EXPECTED_USER_COUNT))
                 .body("[0].id", notNullValue())
-                .body("[0].name", notNullValue())
                 .body("[0].email", notNullValue())
-                .body("[0].username", notNullValue());
+                .body("[0].username", notNullValue())
+                .body("[0].name.firstname", notNullValue())
+                .body("[0].name.lastname", notNullValue());
     }
 
     @ParameterizedTest(name = "GET /users/{0} — should return 200 for user {1}")
     @Order(2)
     @AllureId("U-002")
     @CsvSource({
-            "1, Leanne Graham, Sincere@april.biz",
-            "2, Ervin Howell, Shanna@melissa.tv",
-            "3, Clementine Bauch, Nathan@yesenia.net"
+            "1, john, john@gmail.com",
+            "2, david, morrison@gmail.com",
+            "3, kevin, kevin@gmail.com"
     })
     @Severity(SeverityLevel.CRITICAL)
     @Description("API: GET /users/{id}. Verifies that multiple valid user IDs return HTTP 200 and correct user data.")
-    void testGetUserById_ShouldReturn200WithUser(int userId, String expectedName, String expectedEmail) {
+    void testGetUserById_ShouldReturn200WithUser(int userId, String expectedFirstName, String expectedEmail) {
         given()
                 .spec(requestSpec)
                 .when()
@@ -57,7 +58,7 @@ public class GetUserTests extends TestBase {
                 .then()
                 .statusCode(ApiConfig.STATUS_OK)
                 .body("id", equalTo(userId))
-                .body("name", equalTo(expectedName))
+                .body("name.firstname", equalTo(expectedFirstName))
                 .body("email", equalTo(expectedEmail));
     }
 
@@ -66,7 +67,7 @@ public class GetUserTests extends TestBase {
     @AllureId("U-003")
     @DisplayName("GET /users/{id} — response should match user JSON schema")
     @Severity(SeverityLevel.CRITICAL)
-    @Description("API: GET /users/{id}. Validates that the response matches the expected user JSON schema. Issue: Schema mismatch or missing required fields.")
+    @Description("API: GET /users/{id}. Validates that the response matches the expected user JSON schema.")
     void testGetUser_ShouldMatchUserJsonSchema() {
         given()
                 .spec(requestSpec)
@@ -82,7 +83,7 @@ public class GetUserTests extends TestBase {
     @AllureId("U-004")
     @DisplayName("GET /users/{id} — email field should contain '@'")
     @Severity(SeverityLevel.MINOR)
-    @Description("API: GET /users/{id}. Checks that the email field contains '@'. Issue: Email format may be invalid or missing '@'.")
+    @Description("API: GET /users/{id}. Checks that the email field contains '@'.")
     void testGetUser_EmailShouldMatchPattern() {
         String email = given()
                 .spec(requestSpec)
@@ -99,9 +100,9 @@ public class GetUserTests extends TestBase {
     @Test
     @Order(5)
     @AllureId("U-005")
-    @DisplayName("GET /users/{id} — nested address and company objects should exist")
+    @DisplayName("GET /users/{id} — nested address should exist")
     @Severity(SeverityLevel.NORMAL)
-    @Description("API: GET /users/{id}. Verifies that nested address and company objects exist and contain required fields. Issue: Missing nested objects or fields.")
+    @Description("API: GET /users/{id}. Verifies that nested address object exists and contains required fields.")
     void testGetUser_NestedAddressShouldExist() {
         given()
                 .spec(requestSpec)
@@ -113,8 +114,8 @@ public class GetUserTests extends TestBase {
                 .body("address.street", notNullValue())
                 .body("address.city", notNullValue())
                 .body("address.zipcode", notNullValue())
-                .body("company", notNullValue())
-                .body("company.name", notNullValue());
+                .body("address.geolocation", notNullValue())
+                .body("address.geolocation.lat", notNullValue());
     }
 
     @Test
