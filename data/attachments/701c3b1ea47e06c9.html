@@ -1,0 +1,32 @@
+<div>POST to https://fakestoreapi.com/products</div>
+
+<h4>Body</h4>
+<div>
+    <pre class="preformated-text">
+{
+    &quot;image&quot;: &quot;https://i.pravatar.cc&quot;,
+    &quot;price&quot;: 15.0,
+    &quot;description&quot;: &quot;Description of product 2&quot;,
+    &quot;title&quot;: &quot;Product 2 Title&quot;,
+    &quot;category&quot;: &quot;jewelery&quot;
+}    </pre>
+</div>
+
+<h4>Headers</h4>
+<div>
+        <div>Accept: application/json, application/javascript, text/javascript, text/json</div>
+        <div>Content-Type: application/json</div>
+</div>
+
+
+
+<h4>Curl</h4>
+<div>
+curl -v -X POST &#39;https://fakestoreapi.com/products&#39; -H &#39;Accept: application/json, application/javascript, text/javascript, text/json&#39; -H &#39;Content-Type: application/json&#39; -d &#39;{
+    &quot;image&quot;: &quot;https://i.pravatar.cc&quot;,
+    &quot;price&quot;: 15.0,
+    &quot;description&quot;: &quot;Description of product 2&quot;,
+    &quot;title&quot;: &quot;Product 2 Title&quot;,
+    &quot;category&quot;: &quot;jewelery&quot;
+}&#39;
+</div>
